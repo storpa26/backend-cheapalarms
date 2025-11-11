@@ -1,0 +1,33 @@
+# WordPress core
+wordpress/wp-admin/
+wordpress/wp-includes/
+wordpress/index.php
+wordpress/xmlrpc.php
+wordpress/license.txt
+wordpress/readme.html
+
+# Environment-specific config (commit a sample instead)
+wordpress/wp-config.php
+*.local.php
+
+# Runtime uploads/cache
+wordpress/wp-content/uploads/
+wordpress/wp-content/cache/
+wordpress/wp-content/backups/
+wordpress/wp-content/upgrade/
+wordpress/wp-content/et-cache/
+wordpress/wp-content/debug.log
+
+# Vendor/build outputs
+node_modules/
+vendor/
+.next/
+dist/
+build/
+.cache/
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
