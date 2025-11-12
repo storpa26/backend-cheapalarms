@@ -114,7 +114,7 @@ class EstimateService
                     $rawAll[] = $record;
                 }
 
-                $rid = $record['id'] ?? $record['_id'] ?? $record['estimateId'] ?? null;
+                $estimateId = $record['estimateId'] ?? $record['id'] ?? $record['_id'] ?? null;
                 $email =
                     $record['contact']['email'] ??
                     $record['contactDetails']['email'] ??
@@ -123,13 +123,18 @@ class EstimateService
 
                 $status = $record['estimateStatus'] ?? $record['status'] ?? '';
 
+                $portalMetaRaw = $estimateId ? get_option('ca_portal_meta_' . $estimateId, '{}') : '{}';
+                $portalMeta    = json_decode(is_string($portalMetaRaw) ? $portalMetaRaw : '{}', true);
+                $inviteToken   = $portalMeta['account']['inviteToken'] ?? null;
+
                 $out[] = [
-                    'id'             => $rid,
+                    'id'             => $estimateId,
                     'estimateNumber' => $record['estimateNumber'] ?? null,
                     'email'          => $email,
                     'status'         => $status,
                     'createdAt'      => $record['createdAt'] ?? '',
                     'updatedAt'      => $record['updatedAt'] ?? '',
+                    'inviteToken'    => $inviteToken,
                 ];
 
                 if (count($out) >= $limit) {
