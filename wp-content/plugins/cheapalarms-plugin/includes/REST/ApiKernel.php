@@ -6,6 +6,7 @@ use CheapAlarms\Plugin\REST\Controllers\AuthController;
 use CheapAlarms\Plugin\REST\Controllers\EstimateController;
 use CheapAlarms\Plugin\REST\Controllers\PortalController;
 use CheapAlarms\Plugin\REST\Controllers\UploadController;
+use CheapAlarms\Plugin\REST\Controllers\ProductsController;
 use CheapAlarms\Plugin\Services\Container;
 
 class ApiKernel
@@ -21,6 +22,7 @@ class ApiKernel
             new EstimateController($this->container),
             new UploadController($this->container),
             new PortalController($this->container),
+            new ProductsController($this->container),
         ];
 
         foreach ($controllers as $controller) {

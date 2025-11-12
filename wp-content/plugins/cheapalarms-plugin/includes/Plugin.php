@@ -9,6 +9,7 @@ use CheapAlarms\Plugin\REST\ApiKernel;
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\Logger;
+use CheapAlarms\Plugin\Services\ProductRepository;
 
 use function add_action;
 use function add_filter;
@@ -120,6 +121,7 @@ class Plugin
         $this->container->set(Config::class, fn () => new Config());
         $this->container->set(Logger::class, fn () => new Logger());
         $this->container->set(Authenticator::class, fn () => new Authenticator($this->container->get(Config::class)));
+        $this->container->set(ProductRepository::class, fn () => new ProductRepository());
         $this->container->set(\CheapAlarms\Plugin\Services\GhlClient::class, fn () => new \CheapAlarms\Plugin\Services\GhlClient(
             $this->container->get(Config::class),
             $this->container->get(Logger::class)
