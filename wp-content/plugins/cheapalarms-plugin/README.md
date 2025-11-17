@@ -10,6 +10,7 @@ Modernised WordPress plugin that exposes the CheapAlarms backend integration (GH
   ```php
   define('CA_GHL_TOKEN', 'your-ghl-token');
   define('CA_LOCATION_ID', 'ghl-location-id');
+  define('CA_SERVICEM8_API_KEY', 'your-servicem8-api-key'); // Optional: ServiceM8 integration
   define('CA_UPLOAD_SHARED_SECRET', 'strong-shared-secret');
   define('CA_UPLOAD_MAX_MB', 12); // optional, defaults to 10MB
   define('CA_UPLOAD_ALLOWED_ORIGINS', 'https://cheapalarms.com.au,https://app.cheapalarms.com.au');
@@ -40,6 +41,16 @@ Modernised WordPress plugin that exposes the CheapAlarms backend integration (GH
 | `POST /wp-json/ca/v1/portal/accept` | Mark estimate accepted | public |
 | `POST /wp-json/ca/v1/portal/create-account` | Provision customer account | public |
 | `POST /wp-json/ca/v1/portal/resend-invite` | Resend portal invite (admin only) | requires `manage_options` |
+| `GET /wp-json/ca/v1/servicem8/test` | Test ServiceM8 API connection | requires `ca_view_estimates` |
+| `GET /wp-json/ca/v1/servicem8/companies` | List companies (clients) | requires `ca_view_estimates` |
+| `POST /wp-json/ca/v1/servicem8/companies` | Create a company | requires `ca_manage_portal` |
+| `GET /wp-json/ca/v1/servicem8/jobs` | List jobs | requires `ca_view_estimates` |
+| `POST /wp-json/ca/v1/servicem8/jobs` | Create a job | requires `ca_manage_portal` |
+| `GET /wp-json/ca/v1/servicem8/jobs/{uuid}` | Get a specific job | requires `ca_view_estimates` |
+| `DELETE /wp-json/ca/v1/servicem8/jobs/{uuid}` | Delete a job | requires `ca_manage_portal` |
+| `GET /wp-json/ca/v1/ghl/contacts` | Check GHL contacts config | requires `ca_view_estimates` |
+| `POST /wp-json/ca/v1/ghl/contacts` | Create/update GHL contact | requires `ca_manage_portal` |
+| `POST /wp-json/ca/v1/ghl/messages` | Send GHL message | requires `ca_manage_portal` |
 
 > Each public endpoint still validates plugin configuration and rate-limits uploads. Add additional nonce/cookie validation when embedding in templates.
 

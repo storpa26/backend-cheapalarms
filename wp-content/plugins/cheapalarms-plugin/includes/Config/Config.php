@@ -9,6 +9,7 @@ class Config
     private array $defaults = [
         'ghl_token'              => '',
         'ghl_location_id'        => '',
+        'servicem8_api_key'      => '',
         'upload_shared_secret'   => '',
         'upload_max_mb'          => 10,
         'upload_allowed_origins' => [],
@@ -136,6 +137,11 @@ class Config
     public function getUploadAllowedOrigins(): array
     {
         return $this->getAllowedOrigins();
+    }
+
+    public function getServiceM8ApiKey(): string
+    {
+        return $this->fromOverrides('servicem8_api_key') ?: $this->getEnv('CA_SERVICEM8_API_KEY', $this->defaults['servicem8_api_key']);
     }
 
     public function isConfigured(): bool
