@@ -140,6 +140,15 @@ class Plugin
             $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
             $this->container->get(Logger::class)
         ));
+        $this->container->set(\CheapAlarms\Plugin\Services\ServiceM8Client::class, fn () => new \CheapAlarms\Plugin\Services\ServiceM8Client(
+            $this->container->get(Config::class),
+            $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\ServiceM8Service::class, fn () => new \CheapAlarms\Plugin\Services\ServiceM8Service(
+            $this->container->get(\CheapAlarms\Plugin\Services\ServiceM8Client::class),
+            $this->container->get(Config::class),
+            $this->container->get(Logger::class)
+        ));
     }
 
     private function registerRestEndpoints(): void
