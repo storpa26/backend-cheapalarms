@@ -90,6 +90,52 @@ class GhlController implements ControllerInterface
                     $result = $this->client->post('/contacts/', $payload);
                     
                     if (is_wp_error($result)) {
+                        // Check if this is a duplicate contact error (400 with contactId in meta)
+                        $errorData = $result->get_error_data();
+                        $errorCode = $result->get_error_code();
+                        
+                        if ($errorCode === 'ghl_http_error' && isset($errorData['code']) && $errorData['code'] === 400) {
+                            $errorBody = $errorData['body'] ?? null;
+                            
+                            // Parse error body if it's a string
+                            if (is_string($errorBody)) {
+                                $decoded = json_decode($errorBody, true);
+                                if (json_last_error() === JSON_ERROR_NONE) {
+                                    $errorBody = $decoded;
+                                } else {
+                                    $errorBody = null; // Don't use invalid JSON
+                                }
+                            }
+                            
+                            // Check if error indicates duplicate contact with contactId in meta
+                            // GHL error structure: { "statusCode": 400, "message": "...", "meta": { "contactId": "..." } }
+                            if (is_array($errorBody)) {
+                                $errorMessage = $errorBody['message'] ?? '';
+                                $statusCode = $errorBody['statusCode'] ?? $errorData['code'] ?? null;
+                                $hasDuplicateMessage = stripos($errorMessage, 'duplicate') !== false || stripos($errorMessage, 'duplicated') !== false;
+                                $hasContactId = isset($errorBody['meta']['contactId']) && !empty($errorBody['meta']['contactId']);
+                                
+                                if ($statusCode === 400 && ($hasDuplicateMessage || $hasContactId)) {
+                                    // Extract contactId from error metadata
+                                    $existingContactId = $errorBody['meta']['contactId'] ?? '';
+                                    
+                                    if (!empty($existingContactId)) {
+                                        // Contact exists, return it as success
+                                        return new WP_REST_Response([
+                                            'ok' => true,
+                                            'contact' => [
+                                                'id' => $existingContactId,
+                                                'email' => $email,
+                                                'firstName' => $firstName,
+                                                'lastName' => $lastName,
+                                            ],
+                                        ], 200);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // For other errors, return the error
                         return new WP_REST_Response([
                             'ok' => false,
                             'error' => $result->get_error_message(),

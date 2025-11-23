@@ -35,9 +35,16 @@ class PortalController implements ControllerInterface
             'permission_callback' => function (WP_REST_Request $request) {
                 $estimateId = sanitize_text_field($request->get_param('estimateId'));
                 $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
-                if (is_user_logged_in()) {
-                    return current_user_can('ca_access_portal') || current_user_can('ca_manage_portal');
+                
+                // Check if user is authenticated via JWT (works in REST API context)
+                // is_user_logged_in() doesn't work reliably in REST API permission callbacks with JWT
+                $user = wp_get_current_user();
+                if ($user && $user->ID > 0) {
+                    // User is authenticated - allow access
+                    return true;
                 }
+                
+                // Fallback: check invite token if no authenticated user
                 return $estimateId && $inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken);
             },
             'callback'            => function (WP_REST_Request $request) {
@@ -55,9 +62,40 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/dashboard', [
             'methods'             => 'GET',
-            'permission_callback' => fn () => is_user_logged_in() && (current_user_can('ca_access_portal') || current_user_can('ca_manage_portal')),
+            'permission_callback' => function () {
+                // Always return true - we'll validate authentication in the callback
+                // This allows the request to proceed, and the callback will check if user is authenticated
+                // This approach works better with JWT authentication where determine_current_user filter
+                // runs after permission_callback, so wp_get_current_user() might not be set yet here
+                return true;
+            },
             'callback'            => function () {
+                // Force refresh of current user - clear cache to ensure JWT filter has run
+                global $current_user;
+                $current_user = null;
+                
+                // Try to get user again
                 $user = wp_get_current_user();
+                
+                // If still no user, manually check for JWT token and authenticate
+                if (!$user || 0 === $user->ID) {
+                    // Check if Authorization header exists
+                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
+                    if (!$authHeader && function_exists('apache_request_headers')) {
+                        $headers = apache_request_headers();
+                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                    }
+                    
+                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+                        // Token exists - manually trigger determine_current_user filter
+                        $userId = apply_filters('determine_current_user', 0);
+                        if ($userId > 0) {
+                            wp_set_current_user($userId);
+                            $user = wp_get_current_user();
+                        }
+                    }
+                }
+                
                 if (!$user || 0 === $user->ID) {
                     return new WP_REST_Response(['ok' => false, 'err' => 'Authentication required'], 401);
                 }

@@ -285,6 +285,44 @@ class PortalService
     }
 
     /**
+     * Link estimate to existing account without provisioning
+     * @return array|WP_Error
+     */
+    public function linkEstimateToExistingAccount(string $estimateId, int $userId, ?string $locationId = null): array|WP_Error
+    {
+        // Attach estimate to user
+        $this->attachEstimateToUser($userId, $estimateId, $locationId);
+        
+        // Get user info
+        $user = get_user_by('id', $userId);
+        if (!$user) {
+            return new WP_Error('user_not_found', __('User not found.', 'cheapalarms'), ['status' => 404]);
+        }
+        
+        // Update meta but don't send email (user already has account)
+        $this->updateMeta($estimateId, [
+            'account' => [
+                'status' => 'active',
+                'statusLabel' => 'Account active',
+                'userId' => $userId,
+                'locationId' => $locationId,
+            ],
+            'locationId' => $locationId,
+        ]);
+        
+        $this->logger->info('Estimate linked to existing account', [
+            'estimateId' => $estimateId,
+            'userId' => $userId,
+        ]);
+        
+        return [
+            'ok' => true,
+            'userId' => $userId,
+            'message' => 'Estimate linked to existing account.',
+        ];
+    }
+
+    /**
      * @return array|WP_Error
      */
     public function resendInvite(string $estimateId, array $contact)
