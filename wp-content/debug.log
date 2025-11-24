@@ -5460,3 +5460,388 @@ Stack trace:
 [23-Nov-2025 06:34:18 UTC] [CheapAlarms Plugin] bootstrap executing
 [23-Nov-2025 06:36:19 UTC] [CheapAlarms Plugin] bootstrap executing
 [23-Nov-2025 06:38:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[23-Nov-2025 15:53:56 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:58:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:58:59 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:58:59 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:08 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:08 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 01:59:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:11 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:11 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 01:59:12 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:12 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:12 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 01:59:29 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 01:59:29 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 01:59:29 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:01:57 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:01:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:01:59 UTC] Automatic updates starting...
+[24-Nov-2025 02:02:00 UTC]   Automatic plugin updates starting...
+[24-Nov-2025 02:02:00 UTC]   Automatic plugin updates complete.
+[24-Nov-2025 02:02:01 UTC] Automatic updates complete.
+[24-Nov-2025 02:02:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:02:03 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:03:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:03:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:03:48 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:03:48 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:11 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:19 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:19 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:20 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:04:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:04:21 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:04:21 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:05:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:05:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:05:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:05:16 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:05:16 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:05:16 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:16:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:16:48 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:16:48 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:16:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:16:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:16:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:16:56 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:16:56 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:16:56 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:16:57 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 02:16:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:16:58 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:16:58 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:17:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:17:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:17:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:17:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:17:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:17:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:19:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:19:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:22:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:22:08 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:22:08 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:22:12 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:22:12 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:22:12 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:22:13 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 02:22:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:22:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:22:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:23:32 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:23:32 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:23:32 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:23:55 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:23:55 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:23:55 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:23:55 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 02:25:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:38 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:38 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:25:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:26:32 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:31:56 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:31:56 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:31:56 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:32:00 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:32:00 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:32:00 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:32:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:32:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:32:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:32:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:45:46 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:45:46 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:45:46 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 02:45:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 02:57:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 02:58:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 03:59:05 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 03:59:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 04:26:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:01:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:01:44 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:37:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:37:21 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:37:21 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:37:22 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:46:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:47:32 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:32 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:32 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:47:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:38 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:38 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:47:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:50:53 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:50:53 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:50:53 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:50:54 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:50:54 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:50:54 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:50:54 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:50:54 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:50:55 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:51:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:51:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:51:26 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:51:26 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:51:30 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:51:30 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:51:30 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 05:51:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 05:51:36 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 05:51:36 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:14:40 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:14:40 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:14:40 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:36 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:36 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:40 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:40 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:40 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:19:43 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:19:43 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:19:43 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:17 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:22:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:40 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:40 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:40 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:44 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:44 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:44 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:44 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 06:55:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:50 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 06:55:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:51 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:51 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:51 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 06:55:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:55:52 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:55:52 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:55:53 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:56:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:56:03 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 06:56:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 06:56:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 06:56:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 06:56:04 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:06:36 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:06:37 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 07:07:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:07:22 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:07:22 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:07:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:07:23 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:07:23 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:07:23 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 07:08:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:21 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:21 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:23 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:23 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:24 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:08:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:08:26 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:08:26 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:51:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:51:05 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:51:05 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:51:05 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 07:51:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:00:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:00:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:00:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:00:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:00:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:00:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:00:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:00:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:00:51 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:00:51 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:00:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:00:52 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:00:52 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:06:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:06:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:06:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:06:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:06:43 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:06:43 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:06:43 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:00 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:08:00 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:08:00 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:08:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:08:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:08:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:08:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:25 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[24-Nov-2025 09:08:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:08:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:08:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 09:08:28 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 09:08:28 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 09:08:28 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}

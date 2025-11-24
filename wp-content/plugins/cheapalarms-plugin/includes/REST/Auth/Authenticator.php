@@ -232,21 +232,24 @@ class Authenticator
 
     private function getBearerToken(): ?string
     {
+        // First, check Authorization header
         $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
         if (!$authHeader && function_exists('apache_request_headers')) {
             $headers = apache_request_headers();
             $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
         }
 
-        if (!$authHeader) {
-            return null;
+        if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+            return trim(substr($authHeader, 7));
         }
 
-        if (stripos($authHeader, 'Bearer ') !== 0) {
-            return null;
+        // Fallback: check cookies for JWT token (for httpOnly cookies)
+        $cookieName = 'ca_jwt';
+        if (isset($_COOKIE[$cookieName]) && !empty($_COOKIE[$cookieName])) {
+            return $_COOKIE[$cookieName];
         }
 
-        return trim(substr($authHeader, 7));
+        return null;
     }
 
     private function base64UrlEncode(string $value): string

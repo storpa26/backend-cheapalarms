@@ -383,6 +383,12 @@ class PortalService
             $locations = [];
         }
 
+        // Get the user object to pass to getStatus
+        $user = get_user_by('id', $userId);
+        if (!$user) {
+            return [];
+        }
+
         $items = [];
         foreach (array_unique($estimateIds) as $estimateId) {
             if (!$estimateId) {
@@ -390,7 +396,8 @@ class PortalService
             }
 
             $locationId = $locations[$estimateId] ?? '';
-            $status     = $this->getStatus($estimateId, $locationId);
+            // Pass the user object to getStatus so it can properly check permissions
+            $status     = $this->getStatus($estimateId, $locationId, null, $user);
             if (is_wp_error($status)) {
                 continue;
             }
