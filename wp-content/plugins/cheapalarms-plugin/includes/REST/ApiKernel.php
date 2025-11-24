@@ -9,6 +9,7 @@ use CheapAlarms\Plugin\REST\Controllers\UploadController;
 use CheapAlarms\Plugin\REST\Controllers\ProductsController;
 use CheapAlarms\Plugin\REST\Controllers\ServiceM8Controller;
 use CheapAlarms\Plugin\REST\Controllers\GhlController;
+use CheapAlarms\Plugin\REST\Controllers\UsersController;
 use CheapAlarms\Plugin\Services\Container;
 
 class ApiKernel
@@ -27,6 +28,7 @@ class ApiKernel
             new ProductsController($this->container),
             new ServiceM8Controller($this->container),
             new GhlController($this->container),
+            new UsersController($this->container),
         ];
 
         foreach ($controllers as $controller) {

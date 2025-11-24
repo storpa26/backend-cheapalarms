@@ -168,6 +168,46 @@ class PortalController implements ControllerInterface
             },
         ]);
 
+        register_rest_route('ca/v1', '/portal/invite-ghl-contact', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => $this->auth->requireCapability('ca_manage_portal'),
+            'callback'            => function (WP_REST_Request $request) {
+                $payload = $request->get_json_params();
+                $ghlContactId = sanitize_text_field($payload['ghlContactId'] ?? '');
+                
+                if (!$ghlContactId) {
+                    return new WP_REST_Response(['ok' => false, 'error' => 'ghlContactId required'], 400);
+                }
+
+                // Get GHL client and fetch contact details
+                $ghlClient = $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class);
+                $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
+                
+                if (empty($config->getLocationId())) {
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'error' => 'Missing GHL_LOCATION_ID in environment',
+                    ], 500);
+                }
+
+                // Fetch GHL contact details
+                // GHL API: GET /contacts/{contactId}?locationId=xxx
+                $ghlContact = $ghlClient->get("/contacts/{$ghlContactId}", [
+                    'locationId' => $config->getLocationId(),
+                ]);
+                
+                if (is_wp_error($ghlContact)) {
+                    return $this->respond($ghlContact);
+                }
+
+                // Get CustomerService and invite
+                $customerService = $this->container->get(\CheapAlarms\Plugin\Services\CustomerService::class);
+                $result = $customerService->inviteGhlContactToPortal($ghlContactId, $ghlContact);
+                
+                return $this->respond($result);
+            },
+        ]);
+
         register_rest_route('ca/v1', '/portal/test-account', [
             'methods'             => 'GET',
             'permission_callback' => function (WP_REST_Request $request) {
