@@ -150,6 +150,92 @@ class GhlController implements ControllerInterface
             ],
         ]);
 
+        // List contacts endpoint
+        register_rest_route('ca/v1', '/ghl/contacts/list', [
+            'methods'             => 'GET',
+            'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
+            'callback'            => function (WP_REST_Request $request) {
+                $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
+                
+                if (empty($config->getGhlToken())) {
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'error' => 'Missing GHL_API_KEY in environment',
+                    ], 500);
+                }
+                
+                if (empty($config->getLocationId())) {
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'error' => 'Missing GHL_LOCATION_ID in environment',
+                    ], 500);
+                }
+
+                $limit = (int) ($request->get_param('limit') ?: 50);
+                $offset = (int) ($request->get_param('offset') ?: 0);
+                
+                // Cap limit at 100 for performance
+                $limit = min($limit, 100);
+
+                $result = $this->client->get('/contacts/', [
+                    'locationId' => $config->getLocationId(),
+                    'limit' => $limit,
+                    'offset' => $offset,
+                ]);
+                
+                if (is_wp_error($result)) {
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->error('GHL contacts list error', [
+                        'error' => $result->get_error_message(),
+                        'code' => $result->get_error_code(),
+                        'data' => $result->get_error_data(),
+                    ]);
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'error' => $result->get_error_message(),
+                    ], $result->get_error_data()['code'] ?? 500);
+                }
+
+                // GHL API response structure can vary - handle different formats
+                $contacts = [];
+                $total = 0;
+                
+                // Try different possible response structures
+                if (isset($result['contacts']) && is_array($result['contacts'])) {
+                    // Standard format: { contacts: [...], meta: { total: ... } }
+                    $contacts = $result['contacts'];
+                    $total = $result['meta']['total'] ?? count($contacts);
+                } elseif (isset($result['contact']) && is_array($result['contact'])) {
+                    // Single contact wrapped
+                    $contacts = [$result['contact']];
+                    $total = 1;
+                } elseif (is_array($result) && isset($result[0]) && isset($result[0]['id'])) {
+                    // Direct array of contacts
+                    $contacts = $result;
+                    $total = count($contacts);
+                } else {
+                    // Log the actual response structure for debugging
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->warning('Unexpected GHL contacts response structure', [
+                        'response_keys' => array_keys($result),
+                        'response_sample' => is_array($result) ? array_slice($result, 0, 1) : $result,
+                    ]);
+                }
+
+                return new WP_REST_Response([
+                    'ok' => true,
+                    'contacts' => $contacts,
+                    'total' => $total,
+                    'limit' => $limit,
+                    'offset' => $offset,
+                    '_debug' => [
+                        'response_keys' => is_array($result) ? array_keys($result) : 'not_array',
+                        'contacts_count' => count($contacts),
+                    ],
+                ], 200);
+            },
+        ]);
+
         // Messages endpoint
         register_rest_route('ca/v1', '/ghl/messages', [
             'methods'             => 'POST',

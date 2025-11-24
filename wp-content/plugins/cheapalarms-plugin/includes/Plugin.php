@@ -149,6 +149,10 @@ class Plugin
             $this->container->get(Config::class),
             $this->container->get(Logger::class)
         ));
+        $this->container->set(\CheapAlarms\Plugin\Services\CustomerService::class, fn () => new \CheapAlarms\Plugin\Services\CustomerService(
+            $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
+            $this->container->get(Logger::class)
+        ));
     }
 
     private function registerRestEndpoints(): void
