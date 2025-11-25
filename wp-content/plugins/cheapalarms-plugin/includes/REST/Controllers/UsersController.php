@@ -33,7 +33,7 @@ class UsersController implements ControllerInterface
 
     /**
      * GET /ca/v1/users
-     * Returns WordPress users with customer role
+     * Returns WordPress users with customer or ca_customer role
      * Includes: id, email, name, roles, ghlContactId, hasPortal
      */
     public function listUsers(WP_REST_Request $request): WP_REST_Response
@@ -42,7 +42,7 @@ class UsersController implements ControllerInterface
         $limit = min($limit, 200); // Cap at 200 for performance
 
         $users = get_users([
-            'role' => 'customer',
+            'role__in' => ['customer', 'ca_customer'], // Include both customer roles
             'number' => $limit,
             'orderby' => 'registered',
             'order' => 'DESC',
@@ -59,7 +59,7 @@ class UsersController implements ControllerInterface
                 'name' => trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) ?: $user->display_name,
                 'firstName' => $user->first_name ?? '',
                 'lastName' => $user->last_name ?? '',
-                'roles' => $user->roles,
+                'roles' => is_array($user->roles) ? $user->roles : [],
                 'ghlContactId' => $ghlContactId ?: null,
                 'hasPortal' => $hasPortal,
                 'registered' => $user->user_registered,
