@@ -7545,3 +7545,59 @@ Stack trace:
 [25-Nov-2025 04:15:03 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
 [25-Nov-2025 04:15:03 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
 [25-Nov-2025 04:15:33 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:17:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:17:08 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:17:08 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:17:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:17:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:17:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:17:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:17:10 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:17:34 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:18:35 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:20:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:22:37 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:24:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:26:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:28:40 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:40:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:40:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:40:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:40:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:41:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:41:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:41:13 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:41:15 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:41:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:42:10 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:44:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:44:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:44:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:44:07 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:44:07 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:44:07 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:44:07 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:44:10 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:44:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:46:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:48:12 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:48:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:50:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:52:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:55:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:55:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:55:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:55:16 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:55:20 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
