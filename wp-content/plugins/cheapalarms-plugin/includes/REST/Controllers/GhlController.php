@@ -172,28 +172,47 @@ class GhlController implements ControllerInterface
                 }
 
                 $limit = (int) ($request->get_param('limit') ?: 50);
-                $offset = (int) ($request->get_param('offset') ?: 0);
                 
                 // Cap limit at 100 for performance
                 $limit = min($limit, 100);
 
+                // Pass locationId as query parameter (required by GHL API for /contacts/ endpoint)
+                // Also pass as header for compatibility
+                // Note: GHL API doesn't support 'offset' parameter for /contacts/ endpoint
+                $locationId = $config->getLocationId();
                 $result = $this->client->get('/contacts/', [
-                    'locationId' => $config->getLocationId(),
+                    'locationId' => $locationId,  // Required in query string
                     'limit' => $limit,
-                    'offset' => $offset,
-                ]);
+                    // 'offset' is not supported by GHL API for /contacts/ endpoint
+                ], 25, $locationId);  // Also pass as header
                 
                 if (is_wp_error($result)) {
                     $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $errorData = $result->get_error_data();
                     $logger->error('GHL contacts list error', [
                         'error' => $result->get_error_message(),
                         'code' => $result->get_error_code(),
-                        'data' => $result->get_error_data(),
+                        'data' => $errorData,
                     ]);
+                    
+                    // Parse error body to get detailed GHL error message
+                    $ghlError = null;
+                    if (isset($errorData['body'])) {
+                        $decoded = json_decode($errorData['body'], true);
+                        if (json_last_error() === JSON_ERROR_NONE) {
+                            $ghlError = $decoded;
+                        }
+                    }
+                    
                     return new WP_REST_Response([
                         'ok' => false,
                         'error' => $result->get_error_message(),
-                    ], $result->get_error_data()['code'] ?? 500);
+                        '_debug' => [
+                            'code' => $result->get_error_code(),
+                            'ghlError' => $ghlError,
+                            'rawErrorData' => $errorData,
+                        ],
+                    ], $errorData['code'] ?? 500);
                 }
 
                 // GHL API response structure can vary - handle different formats

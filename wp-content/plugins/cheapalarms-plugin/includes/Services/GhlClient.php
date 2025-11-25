@@ -20,16 +20,28 @@ class GhlClient
      * Perform a GET request.
      *
      * @param array<string, mixed> $query
+     * @param string|null $locationId Optional location ID to pass as header
      */
-    public function get(string $path, array $query = [], int $timeout = 25)
+    public function get(string $path, array $query = [], int $timeout = 25, ?string $locationId = null)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
             $url .= '?' . http_build_query($query);
         }
 
+        $headers = $this->headers($locationId);
+        
+        // Debug logging in development
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->logger->info('GHL API Request', [
+                'url' => $url,
+                'headers' => array_keys($headers), // Log header names only (not values for security)
+                'hasLocationIdHeader' => isset($headers['LocationId']),
+            ]);
+        }
+
         $response = wp_remote_get($url, [
-            'headers' => $this->headers(),
+            'headers' => $headers,
             'timeout' => $timeout,
         ]);
 
@@ -40,12 +52,13 @@ class GhlClient
      * Perform a POST request.
      *
      * @param array<string, mixed> $body
+     * @param string|null $locationId Optional location ID to pass as header
      */
-    public function post(string $path, array $body, int $timeout = 30)
+    public function post(string $path, array $body, int $timeout = 30, ?string $locationId = null)
     {
         $url = self::BASE_URL . $path;
         $response = wp_remote_post($url, [
-            'headers' => $this->headers(),
+            'headers' => $this->headers($locationId),
             'timeout' => $timeout,
             'body'    => wp_json_encode($body),
         ]);
@@ -57,8 +70,9 @@ class GhlClient
      * Perform a PUT request.
      *
      * @param array<string, mixed> $body
+     * @param string|null $locationId Optional location ID to pass as header
      */
-    public function put(string $path, array $body, array $query = [], int $timeout = 30)
+    public function put(string $path, array $body, array $query = [], int $timeout = 30, ?string $locationId = null)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
@@ -67,7 +81,7 @@ class GhlClient
 
         $response = wp_remote_request($url, [
             'method'  => 'PUT',
-            'headers' => $this->headers(),
+            'headers' => $this->headers($locationId),
             'timeout' => $timeout,
             'body'    => wp_json_encode($body),
         ]);
@@ -78,14 +92,21 @@ class GhlClient
     /**
      * @return array<string, string>
      */
-    private function headers(): array
+    private function headers(?string $locationId = null): array
     {
-        return [
+        $headers = [
             'Authorization' => 'Bearer ' . $this->config->getGhlToken(),
             'Accept'        => 'application/json',
             'Content-Type'  => 'application/json',
             'Version'       => self::API_VERSION,
         ];
+
+        // Add LocationId header if provided
+        if ($locationId !== null && $locationId !== '') {
+            $headers['LocationId'] = $locationId;
+        }
+
+        return $headers;
     }
 
     /**

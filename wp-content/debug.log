@@ -7321,3 +7321,227 @@ Stack trace:
 [24-Nov-2025 19:11:54 UTC] [CheapAlarms Plugin] registering EstimateController routes
 [24-Nov-2025 19:11:55 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"ea91aa16-f81f-4228-812c-cef1e96e5141\"}","request":[]}
 [24-Nov-2025 19:11:55 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"ea91aa16-f81f-4228-812c-cef1e96e5141\"}"}}
+[24-Nov-2025 19:14:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:14:23 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:14:23 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:14:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:14:24 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:14:24 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:14:24 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"302527bb-2206-4f78-86c1-b69b48ed855b\"}","request":[]}
+[24-Nov-2025 19:14:24 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"302527bb-2206-4f78-86c1-b69b48ed855b\"}"}}
+[24-Nov-2025 19:14:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:14:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:14:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:14:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:14:28 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:14:28 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:14:29 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"a4db50b6-07f4-4c84-b6fa-7e72bbe4ba4e\"}","request":[]}
+[24-Nov-2025 19:14:29 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"a4db50b6-07f4-4c84-b6fa-7e72bbe4ba4e\"}"}}
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"ee3d8fd4-cc71-4f5a-91dc-504165ff6f8d\"}","request":[]}
+[24-Nov-2025 19:15:39 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"ee3d8fd4-cc71-4f5a-91dc-504165ff6f8d\"}"}}
+[24-Nov-2025 19:15:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:43 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:43 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:43 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"e150ebac-d013-4820-91b8-d48a8df44891\"}","request":[]}
+[24-Nov-2025 19:15:43 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"e150ebac-d013-4820-91b8-d48a8df44891\"}"}}
+[24-Nov-2025 19:15:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:15:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:15:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:15:50 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"210619ab-90c9-43b0-ac7a-1d6a37157df5\"}","request":[]}
+[24-Nov-2025 19:15:50 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"210619ab-90c9-43b0-ac7a-1d6a37157df5\"}"}}
+[24-Nov-2025 19:20:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:20:25 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:20:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:20:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:20:26 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:20:26 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:20:26 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"2aa1fd32-a203-4905-bb94-6ef4d0d68191\"}","request":[]}
+[24-Nov-2025 19:20:26 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"2aa1fd32-a203-4905-bb94-6ef4d0d68191\"}"}}
+[24-Nov-2025 19:25:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:25:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:25:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:25:03 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:25:03 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:25:03 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:25:03 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?limit=50&offset=0","code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}","request":[]}
+[24-Nov-2025 19:25:03 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 403","code":"ghl_http_error","data":{"code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}"}}
+[24-Nov-2025 19:25:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:25:19 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:25:19 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:25:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[24-Nov-2025 19:25:20 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[24-Nov-2025 19:25:20 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[24-Nov-2025 19:25:20 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?limit=50&offset=0","code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}","request":[]}
+[24-Nov-2025 19:25:20 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 403","code":"ghl_http_error","data":{"code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}"}}
+[24-Nov-2025 19:31:36 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:30 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:30 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:30 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:32 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[25-Nov-2025 02:11:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:48 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:48 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:54 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:54 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:54 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:55 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:11:55 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:11:55 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:11:55 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?limit=50&offset=0","code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}","request":[]}
+[25-Nov-2025 02:11:55 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 403","code":"ghl_http_error","data":{"code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}"}}
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:12:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:12:05 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?limit=50&offset=0","code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}","request":[]}
+[25-Nov-2025 02:12:05 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 403","code":"ghl_http_error","data":{"code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}"}}
+[25-Nov-2025 02:20:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:20:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:20:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:20:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 02:20:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 02:20:20 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?limit=50&offset=0","code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}","request":[]}
+[25-Nov-2025 02:20:20 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 403","code":"ghl_http_error","data":{"code":403,"body":"{\"statusCode\":403,\"message\":\"The token does not have access to this location.\"}"}}
+[25-Nov-2025 02:20:20 UTC] Automatic updates starting...
+[25-Nov-2025 02:20:21 UTC]   Automatic plugin updates starting...
+[25-Nov-2025 02:20:21 UTC]   Automatic plugin updates complete.
+[25-Nov-2025 02:20:22 UTC] Automatic updates complete.
+[25-Nov-2025 02:20:23 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 02:20:23 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:41:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:10 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:12 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:42:29 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:43:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:45:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:47:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:47:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:48:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:48:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:48:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:48:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"9f6b8343-beff-4344-87d4-49d0acb572b8\"}","request":[]}
+[25-Nov-2025 03:49:07 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"9f6b8343-beff-4344-87d4-49d0acb572b8\"}"}}
+[25-Nov-2025 03:49:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"7bf8f660-1afd-4eae-ab2a-ca726e47c184\"}","request":[]}
+[25-Nov-2025 03:49:16 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"7bf8f660-1afd-4eae-ab2a-ca726e47c184\"}"}}
+[25-Nov-2025 03:49:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:26 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:26 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"458803e2-573b-43b0-bd3d-dd17ab4b55b8\"}","request":[]}
+[25-Nov-2025 03:49:27 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"458803e2-573b-43b0-bd3d-dd17ab4b55b8\"}"}}
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 03:49:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 03:49:51 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50&offset=0","code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"711b0f68-f7ce-4cba-9ba4-e24e79af80a1\"}","request":[]}
+[25-Nov-2025 03:49:51 UTC] [CheapAlarms][ERROR] GHL contacts list error {"error":"GHL responded with status 422","code":"ghl_http_error","data":{"code":422,"body":"{\"message\":[\"property offset should not exist\"],\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"711b0f68-f7ce-4cba-9ba4-e24e79af80a1\"}"}}
+[25-Nov-2025 03:51:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:53:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:55:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:57:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 03:59:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:01:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:03:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:04:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:04:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:04:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:04:15 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:04:15 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:04:15 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:04:15 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:04:15 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:05:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:07:29 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:09:30 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:11:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:13:18 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:13:19 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:13:32 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:14:59 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:15:00 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:15:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:15:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:15:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:15:03 UTC] [CheapAlarms Plugin] bootstrap executing
+[25-Nov-2025 04:15:03 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[25-Nov-2025 04:15:03 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[25-Nov-2025 04:15:03 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/?locationId=aLTXtdwNknfmEFo3WBIX&limit=50","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[25-Nov-2025 04:15:03 UTC] PHP Warning:  Undefined variable $offset in /var/www/html/wp-content/plugins/cheapalarms-plugin/includes/REST/Controllers/GhlController.php on line 249
+[25-Nov-2025 04:15:33 UTC] [CheapAlarms Plugin] bootstrap executing
