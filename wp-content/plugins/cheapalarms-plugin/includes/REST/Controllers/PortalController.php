@@ -191,10 +191,9 @@ class PortalController implements ControllerInterface
                 }
 
                 // Fetch GHL contact details
-                // GHL API: GET /contacts/{contactId}?locationId=xxx
-                $ghlContact = $ghlClient->get("/contacts/{$ghlContactId}", [
-                    'locationId' => $config->getLocationId(),
-                ]);
+                // GHL API: GET /contacts/{contactId} with LocationId header
+                $locationId = $config->getLocationId();
+                $ghlContact = $ghlClient->get("/contacts/{$ghlContactId}", [], 25, $locationId);
                 
                 if (is_wp_error($ghlContact)) {
                     return $this->respond($ghlContact);

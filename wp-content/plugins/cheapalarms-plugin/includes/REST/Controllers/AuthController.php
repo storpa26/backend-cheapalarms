@@ -442,9 +442,8 @@ class AuthController implements ControllerInterface
     {
         // Try to find existing contact
         $response = $this->ghlClient->get('/contacts/search', [
-            'locationId' => $locationId,
             'query' => $email,
-        ], 20);
+        ], 20, $locationId);
 
         if (!is_wp_error($response)) {
             $contacts = $response['contacts'] ?? $response['items'] ?? [];
@@ -485,7 +484,7 @@ class AuthController implements ControllerInterface
             $contactData['lastName'] = $lastName;
         }
 
-        $createResponse = $this->ghlClient->post('/contacts/', $contactData);
+        $createResponse = $this->ghlClient->post('/contacts/', $contactData, 30, $locationId);
 
         if (is_wp_error($createResponse)) {
             // Check if this is a duplicate contact error
@@ -581,9 +580,8 @@ class AuthController implements ControllerInterface
             ]);
             
             $retryResponse = $this->ghlClient->get('/contacts/search', [
-                'locationId' => $locationId,
                 'query' => $email,
-            ], 20);
+            ], 20, $locationId);
             
             if (!is_wp_error($retryResponse)) {
                 $contacts = $retryResponse['contacts'] ?? $retryResponse['items'] ?? [];
@@ -650,7 +648,7 @@ class AuthController implements ControllerInterface
         // Try to update contact with email
         $updateResponse = $this->ghlClient->put('/contacts/' . $contactId, [
             'email' => $email,
-        ], ['locationId' => $locationId]);
+        ], [], 30, $locationId);
         
         // Log but don't fail if update fails
         if (is_wp_error($updateResponse)) {
@@ -735,7 +733,9 @@ class AuthController implements ControllerInterface
             'locationId' => $payload['locationId'] ?? 'not set',
         ]);
 
-        $result = $this->ghlClient->post('/conversations/messages', $payload);
+        // Pass locationId as header if available
+        $headerLocationId = $payload['locationId'] ?? $this->config->getLocationId();
+        $result = $this->ghlClient->post('/conversations/messages', $payload, 30, $headerLocationId ?: null);
         
         if (is_wp_error($result)) {
             // Include more details in error message
