@@ -11,10 +11,12 @@ use WP_REST_Request;
 use WP_REST_Response;
 
 use function get_option;
+use function get_user_meta;
 use function sanitize_email;
 use function sanitize_text_field;
 use function email_exists;
 use function wp_get_attachment_url;
+use function wp_get_current_user;
 use Throwable;
 
 class EstimateController implements ControllerInterface
@@ -47,11 +49,84 @@ class EstimateController implements ControllerInterface
 
         register_rest_route('ca/v1', '/estimate', [
             'methods'             => 'GET',
-            'permission_callback' => fn () => $this->auth->requireCapability('ca_view_estimates'),
+            'permission_callback' => function () {
+                // Always return true - we'll validate authentication in the callback
+                // This allows the request to proceed, and the callback will check if user is authenticated
+                // This approach works better with JWT authentication where determine_current_user filter
+                // runs after permission_callback, so wp_get_current_user() might not be set yet here
+                return true;
+            },
             'callback'            => function (WP_REST_Request $request) {
                 $this->auth->ensureConfigured();
-                $result = $this->service->getEstimate($request->get_params());
-                return $this->respond($result);
+                
+                $estimateId = sanitize_text_field($request->get_param('estimateId'));
+                if (!$estimateId) {
+                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                }
+                
+                // Allow admins
+                if ($this->auth->requireCapability('ca_view_estimates')) {
+                    $result = $this->service->getEstimate($request->get_params());
+                    return $this->respond($result, $request);
+                }
+                
+                // Force refresh of current user - clear cache to ensure JWT filter has run
+                global $current_user;
+                $current_user = null;
+                
+                // Try to get user again
+                $user = wp_get_current_user();
+                
+                // If still no user, manually check for JWT token and authenticate
+                if (!$user || 0 === $user->ID) {
+                    // Check if Authorization header exists
+                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
+                    if (!$authHeader && function_exists('apache_request_headers')) {
+                        $headers = apache_request_headers();
+                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                    }
+                    
+                    // Also check cookies for JWT token
+                    $token = null;
+                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+                        $token = trim(substr($authHeader, 7));
+                    } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
+                        $token = $_COOKIE['ca_jwt'];
+                    }
+                    
+                    if ($token) {
+                        // Token exists - manually trigger determine_current_user filter
+                        $userId = apply_filters('determine_current_user', 0);
+                        if ($userId > 0) {
+                            wp_set_current_user($userId);
+                            $user = wp_get_current_user();
+                        }
+                    }
+                }
+                
+                // Check if user is authenticated and linked to estimate
+                if ($user && $user->ID > 0) {
+                    $linkedEstimateIds = get_user_meta($user->ID, 'ca_estimate_ids', true);
+                    if (is_array($linkedEstimateIds) && in_array($estimateId, $linkedEstimateIds, true)) {
+                        // User is linked to this estimate - allow access
+                        $result = $this->service->getEstimate($request->get_params());
+                        return $this->respond($result, $request);
+                    }
+                }
+                
+                // Check invite token if provided (for unauthenticated access via portal link - read-only)
+                $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? '');
+                if ($inviteToken && $this->portalService->validateInviteToken($estimateId, $inviteToken)) {
+                    // Valid invite token - read-only access
+                    $result = $this->service->getEstimate($request->get_params());
+                    return $this->respond($result, $request);
+                }
+                
+                // No valid permission
+                return new WP_REST_Response([
+                    'ok' => false,
+                    'err' => 'You do not have permission to view this estimate. Please log in or use a valid invite link.',
+                ], 401);
             },
         ]);
 
@@ -65,7 +140,7 @@ class EstimateController implements ControllerInterface
                     (int)$request->get_param('limit'),
                     (int)$request->get_param('raw')
                 );
-                return $this->respond($result);
+                return $this->respond($result, $request);
             },
         ]);
 
@@ -79,7 +154,7 @@ class EstimateController implements ControllerInterface
                     sanitize_text_field($request->get_param('locationId')),
                     (int)$request->get_param('raw')
                 );
-                return $this->respond($result);
+                return $this->respond($result, $request);
             },
         ]);
 
@@ -118,7 +193,7 @@ class EstimateController implements ControllerInterface
                     $locationId = $body['altId'] ?? $this->container->get(\CheapAlarms\Plugin\Config\Config::class)->getLocationId();
                     $accountExists = false;
                     
-                    // Check if account exists and link estimate if it does
+                    // Check if account exists and link estimate if it does, or create new account
                     if ($email && $estimateId) {
                         $userId = email_exists($email);
                         if ($userId) {
@@ -131,6 +206,33 @@ class EstimateController implements ControllerInterface
                             
                             if (!is_wp_error($linkResult)) {
                                 $accountExists = true;
+                            }
+                        } else {
+                            // Account doesn't exist → Create account & send invite
+                            $contactDetails = $body['contactDetails'] ?? $body['contact'] ?? [];
+                            $contact = [
+                                'email' => $email,
+                                'firstName' => sanitize_text_field($contactDetails['firstName'] ?? $contactDetails['name'] ?? ''),
+                                'lastName' => sanitize_text_field($contactDetails['lastName'] ?? ''),
+                                'name' => sanitize_text_field($contactDetails['name'] ?? $contactDetails['firstName'] ?? ''),
+                            ];
+                            
+                            $provisionResult = $this->portalService->provisionAccount(
+                                $estimateId,
+                                $contact,
+                                $locationId
+                            );
+                            
+                            if (!is_wp_error($provisionResult)) {
+                                $accountExists = false; // New account was created
+                                $result['accountCreated'] = true;
+                                $result['account'] = $provisionResult['account'] ?? null;
+                            } else {
+                                // Log error but don't fail estimate creation
+                                if (function_exists('error_log')) {
+                                    error_log('[CheapAlarms][WARNING] Failed to provision account: ' . $provisionResult->get_error_message());
+                                }
+                                $result['accountProvisionError'] = $provisionResult->get_error_message();
                             }
                         }
                     }
@@ -178,7 +280,62 @@ class EstimateController implements ControllerInterface
         register_rest_route('ca/v1', '/estimate/photos', [
             [
                 'methods'             => 'POST',
-                'permission_callback' => fn () => $this->auth->requireCapability('ca_manage_portal'),
+                'permission_callback' => function (WP_REST_Request $request) {
+                    // Allow admins
+                    if ($this->auth->requireCapability('ca_manage_portal')) {
+                        return true;
+                    }
+                    
+                    // Get estimate ID from request body
+                    $body = $request->get_json_params();
+                    if (!is_array($body)) {
+                        $body = json_decode($request->get_body(), true);
+                    }
+                    if (!is_array($body)) {
+                        $body = [];
+                    }
+                    $estimateId = sanitize_text_field($body['estimateId'] ?? '');
+                    
+                    if (!$estimateId) {
+                        return false; // No estimate ID provided
+                    }
+                    
+                    // Force refresh of current user - clear cache to ensure JWT filter has run
+                    global $current_user;
+                    $current_user = null;
+                    
+                    // Try to get user again
+                    $user = wp_get_current_user();
+                    
+                    // If still no user, manually check for JWT token and authenticate
+                    if (!$user || 0 === $user->ID) {
+                        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
+                        if (!$authHeader && function_exists('apache_request_headers')) {
+                            $headers = apache_request_headers();
+                            $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                        }
+                        
+                        if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+                            // Token exists - manually trigger determine_current_user filter
+                            $userId = apply_filters('determine_current_user', 0);
+                            if ($userId > 0) {
+                                wp_set_current_user($userId);
+                                $user = wp_get_current_user();
+                            }
+                        }
+                    }
+                    
+                    // Check if user is authenticated and linked to estimate
+                    if ($user && $user->ID > 0) {
+                        $linkedEstimateIds = get_user_meta($user->ID, 'ca_estimate_ids', true);
+                        if (is_array($linkedEstimateIds) && in_array($estimateId, $linkedEstimateIds, true)) {
+                            return true; // User is logged in and linked to this estimate
+                        }
+                    }
+                    
+                    // Login is required for photo uploads - no inviteToken bypass
+                    return false; // No valid permission - login required
+                },
                 'callback'            => function (WP_REST_Request $request) {
                     $this->auth->ensureConfigured();
                     $body = $request->get_json_params();
@@ -307,7 +464,7 @@ class EstimateController implements ControllerInterface
     /**
      * @param array|WP_Error $result
      */
-    private function respond($result): WP_REST_Response
+    private function respond($result, ?WP_REST_Request $request = null): WP_REST_Response
     {
         if (is_wp_error($result)) {
             $status = $result->get_error_data()['status'] ?? 500;
@@ -322,7 +479,16 @@ class EstimateController implements ControllerInterface
             $result['ok'] = true;
         }
 
-        return new WP_REST_Response($result, 200);
+        $response = new WP_REST_Response($result, 200);
+        
+        // Add cache headers for GET requests (improve performance)
+        if ($request && $request->get_method() === 'GET') {
+            // Cache for 2 minutes, allow stale-while-revalidate for 5 minutes
+            $response->header('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+            $response->header('Vary', 'Authorization, Cookie');
+        }
+        
+        return $response;
     }
 
     /**
@@ -372,4 +538,5 @@ class EstimateController implements ControllerInterface
         return false;
     }
 }
+
 

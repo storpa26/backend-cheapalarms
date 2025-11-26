@@ -32,31 +32,73 @@ class PortalController implements ControllerInterface
     {
         register_rest_route('ca/v1', '/portal/status', [
             'methods'             => 'GET',
-            'permission_callback' => function (WP_REST_Request $request) {
-                $estimateId = sanitize_text_field($request->get_param('estimateId'));
-                $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
-                
-                // Check if user is authenticated via JWT (works in REST API context)
-                // is_user_logged_in() doesn't work reliably in REST API permission callbacks with JWT
-                $user = wp_get_current_user();
-                if ($user && $user->ID > 0) {
-                    // User is authenticated - allow access
-                    return true;
-                }
-                
-                // Fallback: check invite token if no authenticated user
-                return $estimateId && $inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken);
+            'permission_callback' => function () {
+                // Always return true - we'll validate authentication in the callback
+                // This allows the request to proceed, and the callback will check if user is authenticated
+                // This approach works better with JWT authentication where determine_current_user filter
+                // runs after permission_callback, so wp_get_current_user() might not be set yet here
+                return true;
             },
             'callback'            => function (WP_REST_Request $request) {
                 $estimateId  = sanitize_text_field($request->get_param('estimateId'));
                 $locationId  = sanitize_text_field($request->get_param('locationId'));
                 $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
+                
                 if (!$estimateId) {
                     return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                 }
+                
+                // Force refresh of current user - clear cache to ensure JWT filter has run
+                global $current_user;
+                $current_user = null;
+                
+                // Try to get user again
                 $user = wp_get_current_user();
-                $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
-                return $this->respond($result);
+                
+                // If still no user, manually check for JWT token and authenticate
+                if (!$user || 0 === $user->ID) {
+                    // Check if Authorization header exists
+                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
+                    if (!$authHeader && function_exists('apache_request_headers')) {
+                        $headers = apache_request_headers();
+                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                    }
+                    
+                    // Also check cookies for JWT token
+                    $token = null;
+                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+                        $token = trim(substr($authHeader, 7));
+                    } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
+                        $token = $_COOKIE['ca_jwt'];
+                    }
+                    
+                    if ($token) {
+                        // Token exists - manually trigger determine_current_user filter
+                        $userId = apply_filters('determine_current_user', 0);
+                        if ($userId > 0) {
+                            wp_set_current_user($userId);
+                            $user = wp_get_current_user();
+                        }
+                    }
+                }
+                
+                // If user is authenticated, allow access
+                if ($user && $user->ID > 0) {
+                    $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                    return $this->respond($result, $request);
+                }
+                
+                // Fallback: check invite token if no authenticated user
+                if ($inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken)) {
+                    $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, null);
+                    return $this->respond($result, $request);
+                }
+                
+                // No valid permission
+                return new WP_REST_Response([
+                    'ok' => false,
+                    'err' => 'You need a valid invite link or must log in with a WordPress account that has portal access.',
+                ], 401);
             },
         ]);
 
@@ -69,7 +111,7 @@ class PortalController implements ControllerInterface
                 // runs after permission_callback, so wp_get_current_user() might not be set yet here
                 return true;
             },
-            'callback'            => function () {
+            'callback'            => function (WP_REST_Request $request) {
                 // Force refresh of current user - clear cache to ensure JWT filter has run
                 global $current_user;
                 $current_user = null;
@@ -101,7 +143,7 @@ class PortalController implements ControllerInterface
                 }
 
                 $result = $this->service->getDashboardData($user);
-                return $this->respond($result);
+                return $this->respond($result, $request);
             },
         ]);
 
@@ -242,7 +284,7 @@ class PortalController implements ControllerInterface
     /**
      * @param array|WP_Error $result
      */
-    private function respond($result): WP_REST_Response
+    private function respond($result, ?WP_REST_Request $request = null): WP_REST_Response
     {
         if (is_wp_error($result)) {
             $status = $result->get_error_data()['status'] ?? 500;
@@ -257,7 +299,16 @@ class PortalController implements ControllerInterface
             $result['ok'] = true;
         }
 
-        return new WP_REST_Response($result, 200);
+        $response = new WP_REST_Response($result, 200);
+        
+        // Add cache headers for GET requests (improve performance)
+        if ($request && $request->get_method() === 'GET') {
+            // Cache for 2 minutes, allow stale-while-revalidate for 5 minutes
+            $response->header('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+            $response->header('Vary', 'Authorization, Cookie');
+        }
+        
+        return $response;
     }
 }
 

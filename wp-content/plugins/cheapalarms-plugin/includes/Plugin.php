@@ -147,10 +147,14 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\ServiceM8Service::class, fn () => new \CheapAlarms\Plugin\Services\ServiceM8Service(
             $this->container->get(\CheapAlarms\Plugin\Services\ServiceM8Client::class),
             $this->container->get(Config::class),
-            $this->container->get(Logger::class)
+            $this->container->get(Logger::class),
+            $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class)
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\CustomerService::class, fn () => new \CheapAlarms\Plugin\Services\CustomerService(
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
+            $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\JobLinkService::class, fn () => new \CheapAlarms\Plugin\Services\JobLinkService(
             $this->container->get(Logger::class)
         ));
     }

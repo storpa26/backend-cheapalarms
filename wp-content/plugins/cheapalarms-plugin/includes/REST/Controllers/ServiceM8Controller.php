@@ -4,11 +4,13 @@ namespace CheapAlarms\Plugin\REST\Controllers;
 
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
+use CheapAlarms\Plugin\Services\JobLinkService;
 use CheapAlarms\Plugin\Services\ServiceM8Service;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
 
+use function current_time;
 use function sanitize_email;
 use function sanitize_text_field;
 use function sanitize_textarea_field;
@@ -16,11 +18,13 @@ use function sanitize_textarea_field;
 class ServiceM8Controller implements ControllerInterface
 {
     private ServiceM8Service $service;
+    private JobLinkService $linkService;
     private Authenticator $auth;
 
     public function __construct(private Container $container)
     {
         $this->service = $this->container->get(ServiceM8Service::class);
+        $this->linkService = $this->container->get(JobLinkService::class);
         $this->auth    = $this->container->get(Authenticator::class);
     }
 
@@ -67,6 +71,36 @@ class ServiceM8Controller implements ControllerInterface
             ],
         ]);
 
+        // Staff endpoints
+        register_rest_route('ca/v1', '/servicem8/staff', [
+            [
+                'methods'             => 'GET',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $params = [
+                        'uuid' => $request->get_param('uuid'),
+                        'name' => $request->get_param('name'),
+                        'email' => $request->get_param('email'),
+                    ];
+                    $result = $this->service->getStaff($params);
+                    return $this->respond($result);
+                },
+            ],
+        ]);
+
+        // Single staff member endpoint
+        register_rest_route('ca/v1', '/servicem8/staff/(?P<uuid>[a-zA-Z0-9\-]+)', [
+            [
+                'methods'             => 'GET',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $uuid = sanitize_text_field($request->get_param('uuid'));
+                    $result = $this->service->getStaffMember($uuid);
+                    return $this->respond($result);
+                },
+            ],
+        ]);
+
         // Jobs endpoints
         register_rest_route('ca/v1', '/servicem8/jobs', [
             [
@@ -99,7 +133,316 @@ class ServiceM8Controller implements ControllerInterface
             ],
         ]);
 
-        // Single job endpoints
+        // Job linking endpoints (MUST be registered BEFORE single job endpoints to avoid route conflict)
+        register_rest_route('ca/v1', '/servicem8/jobs/link', [
+            [
+                'methods'             => 'POST',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $body = $request->get_json_params();
+                    if (!is_array($body)) {
+                        $body = json_decode($request->get_body(), true);
+                    }
+                    if (!is_array($body)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid request body',
+                        ], 400);
+                    }
+
+                    $estimateId = sanitize_text_field($body['estimateId'] ?? '');
+                    $jobUuid = sanitize_text_field($body['jobUuid'] ?? '');
+                    $metadata = is_array($body['metadata'] ?? null) ? $body['metadata'] : null;
+
+                    if (empty($estimateId) || empty($jobUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'estimateId and jobUuid are required',
+                        ], 400);
+                    }
+
+                    $result = $this->linkService->linkEstimateToJob($estimateId, $jobUuid, $metadata);
+                    
+                    if (is_wp_error($result)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => $result->get_error_message(),
+                            'code' => $result->get_error_code(),
+                        ], $result->get_error_data()['status'] ?? 500);
+                    }
+
+                    $linkData = $this->linkService->getLinkByEstimateId($estimateId);
+                    return new WP_REST_Response([
+                        'ok' => true,
+                        'link' => $linkData,
+                    ], 200);
+                },
+            ],
+            [
+                'methods'             => 'GET',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $estimateId = sanitize_text_field($request->get_param('estimateId') ?? '');
+                    $jobUuid = sanitize_text_field($request->get_param('jobUuid') ?? '');
+
+                    if (!empty($estimateId)) {
+                        $linkData = $this->linkService->getLinkByEstimateId($estimateId);
+                        if (!$linkData) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'Link not found',
+                            ], 404);
+                        }
+                        return new WP_REST_Response([
+                            'ok' => true,
+                            'link' => $linkData,
+                        ], 200);
+                    }
+
+                    if (!empty($jobUuid)) {
+                        $linkData = $this->linkService->getLinkByJobUuid($jobUuid);
+                        if (!$linkData) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'Link not found',
+                            ], 404);
+                        }
+                        return new WP_REST_Response([
+                            'ok' => true,
+                            'link' => $linkData,
+                        ], 200);
+                    }
+
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'error' => 'estimateId or jobUuid is required',
+                    ], 400);
+                },
+            ],
+            [
+                'methods'             => 'DELETE',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $estimateId = sanitize_text_field($request->get_param('estimateId') ?? '');
+
+                    if (empty($estimateId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'estimateId is required',
+                        ], 400);
+                    }
+
+                    $result = $this->linkService->unlinkEstimateFromJob($estimateId);
+                    
+                    return new WP_REST_Response([
+                        'ok' => $result,
+                        'message' => $result ? 'Link removed' : 'Link not found',
+                    ], $result ? 200 : 404);
+                },
+            ],
+        ]);
+
+        // List all links (admin only)
+        register_rest_route('ca/v1', '/servicem8/jobs/links', [
+            [
+                'methods'             => 'GET',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $limit = (int) ($request->get_param('limit') ?: 100);
+                    $limit = min($limit, 500); // Cap at 500
+                    
+                    $links = $this->linkService->getAllLinks($limit);
+                    
+                    return new WP_REST_Response([
+                        'ok' => true,
+                        'links' => $links,
+                        'count' => count($links),
+                    ], 200);
+                },
+            ],
+        ]);
+
+        // Update job from estimate
+        register_rest_route('ca/v1', '/servicem8/jobs/update-from-estimate', [
+            [
+                'methods'             => 'POST',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $body = $request->get_json_params();
+                    if (!is_array($body)) {
+                        $body = json_decode($request->get_body(), true);
+                    }
+                    if (!is_array($body)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid request body',
+                        ], 400);
+                    }
+
+                    $estimateId = sanitize_text_field($body['estimateId'] ?? '');
+                    $locationId = sanitize_text_field($body['locationId'] ?? '');
+                    $jobUuid = sanitize_text_field($body['jobUuid'] ?? '');
+                    $options = is_array($body['options'] ?? null) ? $body['options'] : [];
+
+                    if (empty($estimateId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'estimateId is required',
+                        ], 400);
+                    }
+
+                    if (empty($locationId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'locationId is required',
+                        ], 400);
+                    }
+
+                    if (empty($jobUuid)) {
+                        // Try to get job UUID from existing link
+                        $existingLink = $this->linkService->getLinkByEstimateId($estimateId);
+                        if (!$existingLink || empty($existingLink['jobUuid'])) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'jobUuid is required or estimate must be linked to a job',
+                            ], 400);
+                        }
+                        $jobUuid = $existingLink['jobUuid'];
+                    }
+
+                    // Update job from estimate
+                    $result = $this->service->updateJobFromEstimate($estimateId, $locationId, $jobUuid, $options);
+                    
+                    if (is_wp_error($result)) {
+                        return $this->respond($result);
+                    }
+
+                    return new WP_REST_Response([
+                        'ok' => true,
+                        'job' => $result['job'],
+                        'jobUuid' => $result['jobUuid'],
+                        'company' => $result['company'],
+                        'updated' => true,
+                    ], 200);
+                },
+            ],
+        ]);
+
+        // Create job from estimate
+        register_rest_route('ca/v1', '/servicem8/jobs/create-from-estimate', [
+            [
+                'methods'             => 'POST',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $body = $request->get_json_params();
+                    if (!is_array($body)) {
+                        $body = json_decode($request->get_body(), true);
+                    }
+                    if (!is_array($body)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid request body',
+                        ], 400);
+                    }
+
+                    $estimateId = sanitize_text_field($body['estimateId'] ?? '');
+                    $locationId = sanitize_text_field($body['locationId'] ?? '');
+                    $options = is_array($body['options'] ?? null) ? $body['options'] : [];
+
+                    if (empty($estimateId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'estimateId is required',
+                        ], 400);
+                    }
+
+                    if (empty($locationId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'locationId is required',
+                        ], 400);
+                    }
+
+                    // Check if estimate is already linked
+                    $existingLink = $this->linkService->getLinkByEstimateId($estimateId);
+                    $updateIfExists = filter_var($body['updateIfExists'] ?? $request->get_param('updateIfExists') ?? false, FILTER_VALIDATE_BOOLEAN);
+                    
+                    if ($existingLink && $updateIfExists) {
+                        // Update existing job instead of creating new one
+                        $jobUuid = $existingLink['jobUuid'] ?? null;
+                        if (empty($jobUuid)) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'Existing link found but job UUID is missing',
+                                'existingLink' => $existingLink,
+                            ], 400);
+                        }
+
+                        $result = $this->service->updateJobFromEstimate($estimateId, $locationId, $jobUuid, $options);
+                        
+                        if (is_wp_error($result)) {
+                            return $this->respond($result);
+                        }
+
+                        return new WP_REST_Response([
+                            'ok' => true,
+                            'job' => $result['job'],
+                            'jobUuid' => $result['jobUuid'],
+                            'company' => $result['company'],
+                            'updated' => true,
+                            'linked' => true,
+                        ], 200);
+                    } elseif ($existingLink) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Estimate is already linked to a job',
+                            'existingLink' => $existingLink,
+                            'hint' => 'Use updateIfExists=true to update the existing job',
+                        ], 409); // Conflict
+                    }
+
+                    // Create job from estimate
+                    $result = $this->service->createJobFromEstimate($estimateId, $locationId, $options);
+                    
+                    if (is_wp_error($result)) {
+                        return $this->respond($result);
+                    }
+
+                    // Auto-link the job
+                    // Try multiple possible UUID locations in the response
+                    $jobUuid = $result['jobUuid'] ?? $result['job']['uuid'] ?? $result['job']['job_uuid'] ?? $result['job']['id'] ?? null;
+                    
+                    if ($jobUuid) {
+                        $linkMetadata = [
+                            'companyUuid' => $result['company']['uuid'] ?? null,
+                            'companyCreated' => $result['companyCreated'] ?? false,
+                            'createdFrom' => 'estimate',
+                            'createdAt' => current_time('mysql'),
+                        ];
+                        
+                        $linkResult = $this->linkService->linkEstimateToJob($estimateId, $jobUuid, $linkMetadata);
+                        if (is_wp_error($linkResult)) {
+                            // Log error but don't fail the request - job was created successfully
+                            error_log('Failed to link job after creation: ' . $linkResult->get_error_message());
+                        }
+                    } else {
+                        // Log warning if UUID not found
+                        error_log('Job UUID not found in response, cannot create link. Response keys: ' . implode(', ', array_keys($result)));
+                    }
+
+                    return new WP_REST_Response([
+                        'ok' => true,
+                        'job' => $result['job'],
+                        'jobUuid' => $jobUuid, // Explicitly include UUID
+                        'company' => $result['company'],
+                        'companyCreated' => $result['companyCreated'] ?? false,
+                        'linked' => !empty($jobUuid),
+                    ], 200);
+                },
+            ],
+        ]);
+
+        // Single job endpoints (MUST be registered AFTER job linking endpoints to avoid route conflict)
         register_rest_route('ca/v1', '/servicem8/jobs/(?P<uuid>[a-zA-Z0-9\-]+)', [
             [
                 'methods'             => 'GET',
