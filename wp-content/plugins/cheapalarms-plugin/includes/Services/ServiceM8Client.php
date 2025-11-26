@@ -59,6 +59,27 @@ class ServiceM8Client
     }
 
     /**
+     * Perform a PUT request.
+     *
+     * @param string $path API endpoint path
+     * @param array<string, mixed> $body Request body
+     * @param int $timeout Request timeout in seconds
+     * @return array|WP_Error
+     */
+    public function put(string $path, array $body, int $timeout = 30)
+    {
+        $url = self::BASE_URL . $path;
+        $response = wp_remote_request($url, [
+            'method'  => 'PUT',
+            'headers' => $this->headers(),
+            'timeout' => $timeout,
+            'body'    => wp_json_encode($body),
+        ]);
+
+        return $this->processResponse($response, $url, $body);
+    }
+
+    /**
      * Perform a DELETE request.
      *
      * @param string $path API endpoint path
