@@ -40,65 +40,75 @@ class PortalController implements ControllerInterface
                 return true;
             },
             'callback'            => function (WP_REST_Request $request) {
-                $estimateId  = sanitize_text_field($request->get_param('estimateId'));
-                $locationId  = sanitize_text_field($request->get_param('locationId'));
-                $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
-                
-                if (!$estimateId) {
-                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
-                }
-                
-                // Force refresh of current user - clear cache to ensure JWT filter has run
-                global $current_user;
-                $current_user = null;
-                
-                // Try to get user again
-                $user = wp_get_current_user();
-                
-                // If still no user, manually check for JWT token and authenticate
-                if (!$user || 0 === $user->ID) {
-                    // Check if Authorization header exists
-                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-                    if (!$authHeader && function_exists('apache_request_headers')) {
-                        $headers = apache_request_headers();
-                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                try {
+                    $estimateId  = sanitize_text_field($request->get_param('estimateId'));
+                    $locationId  = sanitize_text_field($request->get_param('locationId'));
+                    $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
+                    
+                    if (!$estimateId) {
+                        return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                     }
                     
-                    // Also check cookies for JWT token
-                    $token = null;
-                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                        $token = trim(substr($authHeader, 7));
-                    } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
-                        $token = $_COOKIE['ca_jwt'];
-                    }
+                    // Force refresh of current user - clear cache to ensure JWT filter has run
+                    global $current_user;
+                    $current_user = null;
                     
-                    if ($token) {
-                        // Token exists - manually trigger determine_current_user filter
-                        $userId = apply_filters('determine_current_user', 0);
-                        if ($userId > 0) {
-                            wp_set_current_user($userId);
-                            $user = wp_get_current_user();
+                    // Try to get user again
+                    $user = wp_get_current_user();
+                    
+                    // If still no user, manually check for JWT token and authenticate
+                    if (!$user || 0 === $user->ID) {
+                        // Check if Authorization header exists
+                        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
+                        if (!$authHeader && function_exists('apache_request_headers')) {
+                            $headers = apache_request_headers();
+                            $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+                        }
+                        
+                        // Also check cookies for JWT token
+                        $token = null;
+                        if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
+                            $token = trim(substr($authHeader, 7));
+                        } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
+                            $token = $_COOKIE['ca_jwt'];
+                        }
+                        
+                        if ($token) {
+                            // Token exists - manually trigger determine_current_user filter
+                            $userId = apply_filters('determine_current_user', 0);
+                            if ($userId > 0) {
+                                wp_set_current_user($userId);
+                                $user = wp_get_current_user();
+                            }
                         }
                     }
+                    
+                    // If user is authenticated, allow access
+                    if ($user && $user->ID > 0) {
+                        $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                        return $this->respond($result, $request);
+                    }
+                    
+                    // Fallback: check invite token if no authenticated user
+                    if ($inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken)) {
+                        $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, null);
+                        return $this->respond($result, $request);
+                    }
+                    
+                    // No valid permission
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'err' => 'You need a valid invite link or must log in with a WordPress account that has portal access.',
+                    ], 401);
+                } catch (\Exception $e) {
+                    // Log the error and return a proper response
+                    error_log('Portal status endpoint error: ' . $e->getMessage());
+                    return new WP_REST_Response([
+                        'ok' => false,
+                        'err' => 'An error occurred while fetching portal status. Please try again.',
+                        'code' => 'internal_error',
+                    ], 500);
                 }
-                
-                // If user is authenticated, allow access
-                if ($user && $user->ID > 0) {
-                    $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
-                    return $this->respond($result, $request);
-                }
-                
-                // Fallback: check invite token if no authenticated user
-                if ($inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken)) {
-                    $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, null);
-                    return $this->respond($result, $request);
-                }
-                
-                // No valid permission
-                return new WP_REST_Response([
-                    'ok' => false,
-                    'err' => 'You need a valid invite link or must log in with a WordPress account that has portal access.',
-                ], 401);
             },
         ]);
 
@@ -158,6 +168,55 @@ class PortalController implements ControllerInterface
                     return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                 }
                 $result = $this->service->acceptEstimate($estimateId, $locationId);
+                return $this->respond($result);
+            },
+        ]);
+
+        register_rest_route('ca/v1', '/portal/create-invoice', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $payload     = $request->get_json_params();
+                $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId  = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
+                $force       = !empty($payload['force']);
+
+                if (!$estimateId) {
+                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                }
+
+                // Force refresh of current user so JWT filters can run
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status);
+                }
+
+                $effectiveLocation = $status['locationId'] ?? $locationId;
+                $result = $this->service->createInvoiceForEstimate($estimateId, $effectiveLocation, [
+                    'force' => $force,
+                ]);
+
+                return $this->respond($result);
+            },
+        ]);
+
+        register_rest_route('ca/v1', '/portal/reject', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $payload    = $request->get_json_params();
+                $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId = sanitize_text_field($payload['locationId'] ?? '');
+                $reason     = sanitize_text_field($payload['reason'] ?? '');
+                if (!$estimateId) {
+                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                }
+                $result = $this->service->rejectEstimate($estimateId, $locationId, $reason);
                 return $this->respond($result);
             },
         ]);

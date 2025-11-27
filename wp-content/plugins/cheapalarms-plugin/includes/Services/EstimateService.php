@@ -237,7 +237,9 @@ class EstimateService
         $response = $this->client->put(
             '/invoices/estimate/' . rawurlencode($estimateId),
             $payload,
-            ['altId' => $altId, 'altType' => $altType]
+            ['altId' => $altId],
+            30, // timeout
+            $altId // locationId header (GHL requires this for multi-location accounts)
         );
 
         if (is_wp_error($response)) {
@@ -245,6 +247,172 @@ class EstimateService
         }
 
         return ['ok' => true, 'result' => $response];
+    }
+
+    /**
+     * @return array|WP_Error
+     */
+    public function createInvoiceFromEstimate(string $estimateId, string $locationId, array $options = [])
+    {
+        $payload = array_merge(
+            [
+                'altId'   => $locationId,
+                'altType' => 'location',
+            ],
+            $options
+        );
+
+        $response = $this->client->post(
+            '/invoices/estimate/' . rawurlencode($estimateId) . '/invoice',
+            $payload,
+            30,
+            $locationId
+        );
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        return ['ok' => true, 'result' => $response];
+    }
+
+    /**
+     * Creates an invoice directly from draft estimate data (without requiring estimate to be accepted).
+     * This bypasses the "estimate must be accepted" requirement.
+     *
+     * @return array|WP_Error
+     */
+    public function createInvoiceFromDraftEstimate(string $estimateId, string $locationId, array $options = [])
+    {
+        // Fetch the draft estimate
+        $record = $this->getEstimateById($estimateId, $locationId);
+        if (is_wp_error($record)) {
+            return $record;
+        }
+        if (!$record) {
+            return new WP_Error('not_found', __('Estimate not found.', 'cheapalarms'), ['status' => 404]);
+        }
+
+        // Extract contact details
+        $contactDetails = $this->extractContactDetails($record);
+        
+        // Ensure contact has an ID (required for invoice creation)
+        if (empty($contactDetails['id'])) {
+            return new WP_Error('missing_contact_id', __('Contact ID is required to create invoice. Estimate must have a linked contact.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Build invoice payload from estimate data
+        $invoicePayload = [
+            'altId'          => $locationId,
+            'altType'        => 'location',
+            'name'           => mb_substr((string)($record['name'] ?? 'Invoice'), 0, 40),
+            'title'          => 'INVOICE',
+            'businessDetails' => (array)($record['businessDetails'] ?? ['name' => 'Cheap Alarms']),
+            'currency'       => (string)($record['currency'] ?? ($record['currencyOptions']['code'] ?? 'AUD')),
+            'contactDetails' => $contactDetails,
+            'issueDate'      => gmdate('Y-m-d'),
+            'dueDate'        => gmdate('Y-m-d', strtotime('+30 days')),
+            'items'          => array_map(function ($item) use ($record) {
+                return [
+                    'name'        => (string)($item['name'] ?? ''),
+                    'description' => (string)($item['description'] ?? ''),
+                    'currency'    => (string)($item['currency'] ?? ($record['currency'] ?? 'AUD')),
+                    'amount'      => (float)($item['amount'] ?? 0),
+                    'qty'         => (int)(isset($item['quantity']) ? $item['quantity'] : ($item['qty'] ?? 1)),
+                ];
+            }, (array)($record['items'] ?? [])),
+            'termsNotes'     => (string)($record['termsNotes'] ?? ''),
+        ];
+
+        // Merge any additional options
+        $invoicePayload = array_merge($invoicePayload, $options);
+
+        // Create invoice using general invoice creation endpoint
+        $response = $this->client->post(
+            '/invoices/',
+            $invoicePayload,
+            30,
+            $locationId
+        );
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        return ['ok' => true, 'result' => $response];
+    }
+
+    /**
+     * Ensure an estimate is marked accepted within GHL.
+     *
+     * @return array|WP_Error
+     */
+    public function acceptEstimateStatus(string $estimateId, string $locationId, array $options = [])
+    {
+        $estimateId = sanitize_text_field($estimateId);
+        $locationId = sanitize_text_field($locationId ?: $this->config->getLocationId());
+
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId is required to accept.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        if (!$locationId) {
+            return new WP_Error('missing_location', __('Location ID required to accept estimate.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $payload = array_merge([
+            'altId'   => $locationId,
+            'altType' => 'location',
+        ], $options);
+
+        // Primary accept endpoint
+        $response = $this->client->post(
+            '/invoices/estimate/' . rawurlencode($estimateId) . '/accept',
+            $payload,
+            30,
+            $locationId
+        );
+
+        if (is_wp_error($response)) {
+            $data    = $response->get_error_data();
+            $code    = isset($data['code']) ? (int) $data['code'] : 0;
+            $payload['status'] = 'accepted';
+
+            // Fallback to updating the estimate directly (older accounts/envs)
+            if (in_array($code, [400, 404, 405], true)) {
+                $payload['status'] = 'accepted';
+
+                $fallback = $this->client->put(
+                    '/invoices/estimate/' . rawurlencode($estimateId),
+                    $payload,
+                    ['altId' => $locationId, 'altType' => 'location'],
+                    30,
+                    $locationId
+                );
+
+                if (!is_wp_error($fallback)) {
+                    return ['ok' => true, 'result' => $fallback, 'mode' => 'update'];
+                }
+
+                return $fallback;
+            }
+
+            return $response;
+        }
+
+        return ['ok' => true, 'result' => $response, 'mode' => 'accept'];
+    }
+
+    private function formatDate($value, ?string $fallback = null): string
+    {
+        if ($value) {
+            $timestamp = is_numeric($value) ? (int) $value : strtotime((string) $value);
+            if ($timestamp !== false) {
+                return gmdate('Y-m-d', $timestamp);
+            }
+        }
+
+        return $fallback ? gmdate('Y-m-d', strtotime($fallback)) : gmdate('Y-m-d');
     }
 
     /**
@@ -593,22 +761,6 @@ class EstimateService
             $name = 'Estimate';
         }
         return mb_substr($name, 0, 40);
-    }
-
-    private function formatDate(?string $value, ?string $fallback = null): string
-    {
-        if ($value) {
-            $timestamp = strtotime($value);
-            if ($timestamp !== false) {
-                return gmdate('Y-m-d', $timestamp);
-            }
-        }
-
-        if ($fallback) {
-            return gmdate('Y-m-d', strtotime($fallback));
-        }
-
-        return gmdate('Y-m-d');
     }
 
     /**
