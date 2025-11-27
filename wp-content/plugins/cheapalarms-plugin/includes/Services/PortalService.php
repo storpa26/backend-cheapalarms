@@ -59,6 +59,7 @@ class PortalService
                 'portalUrl'    => $item['account']['portalUrl'] ?? null,
                 'resetUrl'     => $item['account']['resetUrl'] ?? null,
                 'lastInviteAt' => $item['account']['lastInviteAt'] ?? null,
+                'invoice'      => $item['invoice'] ?? null,
             ];
         }
 
@@ -178,18 +179,21 @@ class PortalService
         }
 
         return [
+            'estimateId'   => $estimateId,
+            'locationId'   => $locationId, // Include locationId so frontend can use it for GHL sync
             'quote'        => $quoteStatus,
             'photos'       => $meta['photos'] ?? ['total' => 0, 'required' => 6, 'missingCount' => 6, 'items' => []],
             'installation' => $meta['installation'] ?? ['status' => 'pending', 'statusLabel' => 'Not scheduled', 'message' => null, 'canSchedule' => $quoteStatus['status'] === 'accepted'],
             'documents'    => $meta['documents'] ?? [],
             'account'      => $accountMeta,
+            'invoice'      => $meta['invoice'] ?? null,
         ];
     }
 
     /**
      * @return array|WP_Error
      */
-    public function acceptEstimate(string $estimateId, string $locationId)
+    public function acceptEstimate(string $estimateId, string $locationId = '')
     {
         $status = [
             'status'      => 'accepted',
@@ -198,9 +202,171 @@ class PortalService
             'canAccept'   => false,
         ];
 
+        // Update WordPress meta first (always succeeds)
         $this->updateMeta($estimateId, ['quote' => $status]);
 
-        return ['ok' => true, 'quote' => $status];
+        // Get locationId from meta if not provided (locationId should be stored in meta from getStatus)
+        if (empty($locationId)) {
+            $meta = $this->getMeta($estimateId);
+            $locationId = $meta['locationId'] ?? '';
+        }
+
+        return [
+            'ok'        => true,
+            'quote'     => $status,
+            'ghlSynced' => false,
+            'ghlError'  => null,
+        ];
+    }
+
+    /**
+     * @return array|WP_Error
+     */
+    public function rejectEstimate(string $estimateId, string $locationId = '', string $reason = '')
+    {
+        $status = [
+            'status'         => 'rejected',
+            'statusLabel'    => 'Rejected',
+            'rejectedAt'     => current_time('mysql'),
+            'rejectionReason' => sanitize_text_field($reason),
+            'canAccept'      => false,
+        ];
+
+        // Update WordPress meta first
+        $this->updateMeta($estimateId, ['quote' => $status]);
+
+        // Get locationId from meta if not provided
+        if (empty($locationId)) {
+            $meta = $this->getMeta($estimateId);
+            $locationId = $meta['locationId'] ?? '';
+        }
+
+        return [
+            'ok'        => true,
+            'quote'     => $status,
+            'ghlSynced' => false,
+            'ghlError'  => null,
+        ];
+    }
+
+    /**
+     * Creates a GHL invoice for the provided estimate and caches the metadata locally.
+     * Creates invoice directly from draft estimate data (estimate stays as draft in GHL).
+     *
+     * @param array<string, mixed> $options
+     * @return array|WP_Error
+     */
+    public function createInvoiceForEstimate(string $estimateId, ?string $locationId = null, array $options = [])
+    {
+        $meta  = $this->getMeta($estimateId);
+        $force = !empty($options['force']);
+        unset($options['force']);
+
+        if (!$force && !empty($meta['invoice']['id'])) {
+            return [
+                'invoice' => $meta['invoice'],
+                'exists'  => true,
+            ];
+        }
+
+        $resolvedLocation = $locationId ?: ($meta['locationId'] ?? '');
+        if (!$resolvedLocation) {
+            return new WP_Error('missing_location', __('Location ID required to create invoice.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Create invoice directly from draft estimate (no need to accept estimate first)
+        $response = $this->estimateService->createInvoiceFromDraftEstimate($estimateId, $resolvedLocation, $options);
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $payload = $response['result'] ?? [];
+        $invoice = $this->normaliseInvoiceResponse($payload);
+
+        if (!$invoice['id']) {
+            $this->logger->warning('GHL invoice response missing identifier', [
+                'estimateId' => $estimateId,
+                'payload'    => $payload,
+            ]);
+        }
+
+        $this->updateMeta($estimateId, ['invoice' => $invoice]);
+
+        return [
+            'invoice' => $invoice,
+        ];
+    }
+
+    private function extractGhlErrorMessage(WP_Error $error): string
+    {
+        $payload = $this->parseGhlErrorPayload($error);
+
+        if (!empty($payload['message']) && is_string($payload['message'])) {
+            return $payload['message'];
+        }
+
+        if (!empty($payload['error']) && is_string($payload['error'])) {
+            return $payload['error'];
+        }
+
+        return $error->get_error_message();
+    }
+
+    private function isAlreadyAcceptedError(WP_Error $error): bool
+    {
+        $payload = $this->parseGhlErrorPayload($error);
+        $code    = strtolower((string)($payload['code'] ?? $payload['error'] ?? ''));
+        $message = strtolower((string)($payload['message'] ?? ''));
+
+        if ($code && str_contains($code, 'already')) {
+            return true;
+        }
+
+        return $message && str_contains($message, 'already accepted');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseGhlErrorPayload(WP_Error $error): array
+    {
+        $data = $error->get_error_data();
+        $body = $data['body'] ?? '';
+
+        if (is_string($body) && $body !== '') {
+            $decoded = json_decode($body, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return [];
+    }
+
+    private function normaliseInvoiceResponse(array $payload): array
+    {
+        $invoice = $payload['invoice'] ?? $payload;
+
+        $id = $invoice['id']
+            ?? $invoice['_id']
+            ?? $invoice['invoiceId']
+            ?? null;
+
+        $url = $invoice['liveUrl']
+            ?? $invoice['invoiceUrl']
+            ?? $invoice['url']
+            ?? null;
+
+        return [
+            'id'        => $id,
+            'number'    => $invoice['invoiceNumber'] ?? $invoice['number'] ?? null,
+            'status'    => $invoice['status'] ?? 'pending',
+            'url'       => $url,
+            'total'     => $invoice['total'] ?? null,
+            'currency'  => $invoice['currency'] ?? 'USD',
+            'createdAt' => $invoice['createdAt'] ?? current_time('mysql'),
+            'raw'       => $payload,
+        ];
     }
 
     /**
