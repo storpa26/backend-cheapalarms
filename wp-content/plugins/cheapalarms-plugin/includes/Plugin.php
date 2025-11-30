@@ -3,6 +3,7 @@
 namespace CheapAlarms\Plugin;
 
 use CheapAlarms\Plugin\Admin\Menu;
+use CheapAlarms\Plugin\Admin\UserCapabilities;
 use CheapAlarms\Plugin\Config\Config;
 use CheapAlarms\Plugin\Frontend\PortalPage;
 use CheapAlarms\Plugin\REST\ApiKernel;
@@ -114,6 +115,7 @@ class Plugin
         $this->registerRestEndpoints();
         $this->registerFrontend();
         $this->registerAdminUi();
+        $this->registerAdmin();
     }
 
     private function registerServices(): void
@@ -127,6 +129,11 @@ class Plugin
             $this->container->get(Logger::class)
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\EstimateService::class, fn () => new \CheapAlarms\Plugin\Services\EstimateService(
+            $this->container->get(Config::class),
+            $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
+            $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\InvoiceService::class, fn () => new \CheapAlarms\Plugin\Services\InvoiceService(
             $this->container->get(Config::class),
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
             $this->container->get(Logger::class)
@@ -222,6 +229,13 @@ class Plugin
     private function registerAdminUi(): void
     {
         new Menu();
+    }
+
+    private function registerAdmin(): void
+    {
+        if (is_admin()) {
+            new UserCapabilities();
+        }
     }
 
     private function registerFrontend(): void
