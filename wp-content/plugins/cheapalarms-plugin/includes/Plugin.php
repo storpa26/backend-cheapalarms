@@ -164,6 +164,26 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\JobLinkService::class, fn () => new \CheapAlarms\Plugin\Services\JobLinkService(
             $this->container->get(Logger::class)
         ));
+        $this->container->set(\CheapAlarms\Plugin\Services\Shared\LocationResolver::class, fn () => new \CheapAlarms\Plugin\Services\Shared\LocationResolver(
+            $this->container->get(Config::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class, fn () => new \CheapAlarms\Plugin\Services\Shared\PortalMetaRepository());
+        
+        // Estimate sub-services
+        $this->container->set(\CheapAlarms\Plugin\Services\Estimate\EstimateNormalizer::class, fn () => new \CheapAlarms\Plugin\Services\Estimate\EstimateNormalizer(
+            $this->container->get(Config::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\Estimate\EstimatePhotoService::class, fn () => new \CheapAlarms\Plugin\Services\Estimate\EstimatePhotoService(
+            $this->container->get(Config::class),
+            $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
+            $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\Estimate\EstimateInvoiceService::class, fn () => new \CheapAlarms\Plugin\Services\Estimate\EstimateInvoiceService(
+            $this->container->get(Config::class),
+            $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
+            $this->container->get(Logger::class),
+            $this->container->get(\CheapAlarms\Plugin\Services\Estimate\EstimateNormalizer::class)
+        ));
     }
 
     private function registerRestEndpoints(): void
