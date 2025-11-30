@@ -35,7 +35,8 @@ class PortalService
 
     public function __construct(
         private EstimateService $estimateService,
-        private Logger $logger
+        private Logger $logger,
+        private \CheapAlarms\Plugin\Services\Container $container
     ) {
     }
 
@@ -211,12 +212,162 @@ class PortalService
             $locationId = $meta['locationId'] ?? '';
         }
 
+        // Update GHL signals (non-blocking - errors don't fail acceptance)
+        if ($locationId) {
+            $this->updateGhlSignals($estimateId, $locationId);
+        }
+
         return [
             'ok'        => true,
             'quote'     => $status,
             'ghlSynced' => false,
             'ghlError'  => null,
         ];
+    }
+
+    /**
+     * Update GHL signals (tags, notes) when estimate is accepted.
+     * This is fire-and-forget: errors are logged but don't block acceptance.
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     */
+    private function updateGhlSignals(string $estimateId, string $locationId): void
+    {
+        try {
+            // Fetch estimate to get contact ID and details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Failed to fetch estimate for GHL signals', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contactId = $estimate['contact']['id'] ?? null;
+            if (!$contactId) {
+                $this->logger->warning('Estimate missing contact ID for GHL signals', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+                return;
+            }
+
+            // Get signal service
+            $signalService = $this->container->get(\CheapAlarms\Plugin\Services\GhlSignalService::class);
+
+            // Prepare note data
+            $estimateNumber = $estimate['estimateNumber'] ?? $estimateId;
+            $acceptedAt = current_time('mysql');
+            $noteData = [
+                'estimateNumber' => $estimateNumber,
+                'estimateId' => $estimateId,
+                'acceptedAt' => $acceptedAt,
+                'invoiceNumber' => null, // Will be updated after invoice creation
+            ];
+
+            // Fire-and-forget: Try both updates, log errors, move on
+            $tagResult = $signalService->addAcceptanceTag($contactId, $locationId);
+            if (is_wp_error($tagResult)) {
+                $this->logger->warning('Failed to add GHL acceptance tag', [
+                    'contactId' => $contactId,
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'error' => $tagResult->get_error_message(),
+                ]);
+            }
+
+            $noteResult = $signalService->addAcceptanceNote($contactId, $locationId, $noteData);
+            if (is_wp_error($noteResult)) {
+                $this->logger->warning('Failed to add GHL acceptance note', [
+                    'contactId' => $contactId,
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'error' => $noteResult->get_error_message(),
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            // Catch any unexpected exceptions - don't let them break acceptance
+            $this->logger->error('Exception updating GHL signals', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'exception' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Update GHL note with invoice information after invoice is created.
+     * This is fire-and-forget: errors are logged but don't block invoice creation.
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $invoice Invoice data
+     */
+    private function updateGhlNoteWithInvoice(string $estimateId, string $locationId, array $invoice): void
+    {
+        try {
+            // Fetch estimate to get contact ID
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Failed to fetch estimate for GHL invoice note update', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contactId = $estimate['contact']['id'] ?? null;
+            if (!$contactId) {
+                $this->logger->warning('Estimate missing contact ID for GHL invoice note update', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+                return;
+            }
+
+            // Get signal service
+            $signalService = $this->container->get(\CheapAlarms\Plugin\Services\GhlSignalService::class);
+
+            // Add invoice info to note
+            $invoiceNumber = $invoice['number'] ?? $invoice['id'] ?? '';
+            $result = $signalService->updateAcceptanceNoteWithInvoice(
+                $contactId,
+                $locationId,
+                $estimateId,
+                $invoiceNumber
+            );
+
+            if (is_wp_error($result)) {
+                $this->logger->warning('Failed to update GHL note with invoice info', [
+                    'contactId' => $contactId,
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'invoiceNumber' => $invoiceNumber,
+                    'error' => $result->get_error_message(),
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            // Catch any unexpected exceptions - don't let them break invoice creation
+            $this->logger->error('Exception updating GHL note with invoice', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'exception' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -291,6 +442,11 @@ class PortalService
         }
 
         $this->updateMeta($estimateId, ['invoice' => $invoice]);
+
+        // Update GHL note with invoice information (non-blocking)
+        if (!empty($invoice['id']) && $resolvedLocation) {
+            $this->updateGhlNoteWithInvoice($estimateId, $resolvedLocation, $invoice);
+        }
 
         return [
             'invoice' => $invoice,
