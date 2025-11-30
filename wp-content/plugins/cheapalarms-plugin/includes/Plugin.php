@@ -145,7 +145,8 @@ class Plugin
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\PortalService::class, fn () => new \CheapAlarms\Plugin\Services\PortalService(
             $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
-            $this->container->get(Logger::class)
+            $this->container->get(Logger::class),
+            $this->container
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\ServiceM8Client::class, fn () => new \CheapAlarms\Plugin\Services\ServiceM8Client(
             $this->container->get(Config::class),
@@ -160,6 +161,11 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\CustomerService::class, fn () => new \CheapAlarms\Plugin\Services\CustomerService(
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
             $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\GhlSignalService::class, fn () => new \CheapAlarms\Plugin\Services\GhlSignalService(
+            $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
+            $this->container->get(Logger::class),
+            $this->container->get(Config::class)
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\JobLinkService::class, fn () => new \CheapAlarms\Plugin\Services\JobLinkService(
             $this->container->get(Logger::class)
