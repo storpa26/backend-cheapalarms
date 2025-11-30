@@ -133,22 +133,44 @@ class PortalService
         }
         $locationId = $effectiveLocation;
 
+        // Portal meta is the source of truth for acceptance
+        // Check portal meta FIRST (customer accepted in portal)
+        $portalMetaStatus = $meta['quote']['status'] ?? 'pending';
+        $isAcceptedInPortal = $portalMetaStatus === 'accepted';
+        
+        // Only check GHL status if portal meta doesn't have acceptance
+        // (for cases where estimate was accepted directly in GHL)
         $estimateStatus = $estimate['status'] ?? '';
-        $isAccepted     = $estimateStatus === 'accepted';
+        $isAcceptedInGhl = $estimateStatus === 'accepted';
+        
+        // Portal meta takes precedence - if accepted in portal, it's accepted
+        $isAccepted = $isAcceptedInPortal || $isAcceptedInGhl;
 
         $quoteStatus = [
             'status'      => $isAccepted ? 'accepted' : 'pending',
-            'statusLabel' => $isAccepted ? 'Accepted via GHL' : 'Awaiting approval',
+            'statusLabel' => $isAcceptedInPortal 
+                ? 'Accepted' 
+                : ($isAcceptedInGhl ? 'Accepted via GHL' : 'Awaiting approval'),
             'number'      => $estimate['estimateNumber'] ?? $estimate['estimateId'],
             'acceptedAt'  => $meta['quote']['acceptedAt'] ?? null,
-            'canAccept'   => false,
+            'canAccept'   => !$isAccepted, // Can't accept if already accepted
         ];
-        if ($isAccepted && empty($quoteStatus['acceptedAt'])) {
+        
+        // If accepted in portal but no acceptedAt timestamp, set it
+        if ($isAcceptedInPortal && empty($quoteStatus['acceptedAt'])) {
+            $quoteStatus['acceptedAt'] = current_time('mysql');
+        }
+        // If accepted in GHL but not in portal meta, update portal meta
+        elseif ($isAcceptedInGhl && !$isAcceptedInPortal) {
             $quoteStatus['acceptedAt'] = current_time('mysql');
         }
 
-        $this->updateMeta($estimateId, ['quote' => $quoteStatus]);
-        $meta = $this->getMeta($estimateId);
+        // Only update meta if status changed or if we need to sync acceptedAt
+        if ($portalMetaStatus !== $quoteStatus['status'] || 
+            ($isAccepted && empty($meta['quote']['acceptedAt']))) {
+            $this->updateMeta($estimateId, ['quote' => $quoteStatus]);
+            $meta = $this->getMeta($estimateId);
+        }
 
         $defaultAccount = [
             'status'      => 'pending',
@@ -178,6 +200,9 @@ class PortalService
         } elseif ($isAccepted && ($accountMeta['status'] ?? '') === 'active' && !empty($accountMeta['userId'])) {
             $this->attachEstimateToUser((int) $accountMeta['userId'], $estimateId, $locationId);
         }
+
+        // Refresh meta one final time to ensure we have latest invoice data
+        $meta = $this->getMeta($estimateId);
 
         return [
             'estimateId'   => $estimateId,
