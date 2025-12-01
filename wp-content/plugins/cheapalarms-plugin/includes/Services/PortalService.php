@@ -36,7 +36,8 @@ class PortalService
     public function __construct(
         private EstimateService $estimateService,
         private Logger $logger,
-        private \CheapAlarms\Plugin\Services\Container $container
+        private \CheapAlarms\Plugin\Services\Container $container,
+        private \CheapAlarms\Plugin\Config\Config $config
     ) {
     }
 
@@ -222,15 +223,97 @@ class PortalService
      */
     public function acceptEstimate(string $estimateId, string $locationId = '')
     {
-        $status = [
-            'status'      => 'accepted',
-            'statusLabel' => 'Accepted',
-            'acceptedAt'  => current_time('mysql'),
-            'canAccept'   => false,
-        ];
+        // Check if already accepted - prevent duplicate acceptance
+        $meta = $this->getMeta($estimateId);
+        $currentStatus = $meta['quote']['status'] ?? 'sent';
+        
+        if ($currentStatus === 'accepted') {
+            // Already accepted - return existing status
+            $this->logger->info('Estimate already accepted', [
+                'estimateId' => $estimateId,
+                'acceptedAt' => $meta['quote']['acceptedAt'] ?? null,
+            ]);
+            return [
+                'ok'        => true,
+                'quote'     => $meta['quote'],
+                'alreadyAccepted' => true,
+                'ghlSynced' => false,
+                'ghlError'  => null,
+            ];
+        }
+        
+        // Check if rejected - cannot accept a rejected estimate
+        if ($currentStatus === 'rejected') {
+            $this->logger->warning('Attempt to accept rejected estimate', [
+                'estimateId' => $estimateId,
+                'rejectedAt' => $meta['quote']['rejectedAt'] ?? null,
+            ]);
+            return new WP_Error(
+                'already_rejected',
+                __('This estimate has been rejected and cannot be accepted. Please contact support if you need to change this.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
 
-        // Update WordPress meta first (always succeeds)
-        $this->updateMeta($estimateId, ['quote' => $status]);
+        // Use WordPress transient for race condition protection (5 second lock)
+        $lockKey = 'ca_accept_lock_' . $estimateId;
+        $lockValue = get_transient($lockKey);
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 5 seconds - previous process likely crashed)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 5) {
+                // Lock is stale - clear it and proceed
+                delete_transient($lockKey);
+                $this->logger->warning('Cleared stale acceptance lock', [
+                    'estimateId' => $estimateId,
+                    'lockAge' => $lockAge,
+                ]);
+            } else {
+                // Lock is active - another request is processing
+                $meta = $this->getMeta($estimateId);
+                $currentStatus = $meta['quote']['status'] ?? 'sent';
+                if ($currentStatus === 'accepted') {
+                    return [
+                        'ok'        => true,
+                        'quote'     => $meta['quote'],
+                        'alreadyAccepted' => true,
+                        'ghlSynced' => false,
+                        'ghlError'  => null,
+                    ];
+                }
+                // If not accepted yet, return error to prevent duplicate processing
+                return new WP_Error(
+                    'processing',
+                    __('Another request is currently processing this estimate. Please wait a moment and try again.', 'cheapalarms'),
+                    ['status' => 409]
+                );
+            }
+        }
+        
+        // Set lock with timestamp
+        set_transient($lockKey, time(), 5);
+
+        try {
+            $status = [
+                'status'      => 'accepted',
+                'statusLabel' => 'Accepted',
+                'acceptedAt'  => current_time('mysql'),
+                'canAccept'   => false,
+            ];
+
+            // Update WordPress meta first (always succeeds)
+            $updateResult = $this->updateMeta($estimateId, ['quote' => $status]);
+            if (!$updateResult) {
+                $this->logger->error('Failed to update portal meta on acceptance', [
+                    'estimateId' => $estimateId,
+                ]);
+                delete_transient($lockKey);
+                return new WP_Error(
+                    'update_failed',
+                    __('Failed to save acceptance status. Please refresh the page and try again. If the problem persists, contact support.', 'cheapalarms'),
+                    ['status' => 500]
+                );
+            }
 
         // Get locationId from meta if not provided (locationId should be stored in meta from getStatus)
         if (empty($locationId)) {
@@ -238,17 +321,94 @@ class PortalService
             $locationId = $meta['locationId'] ?? '';
         }
 
+        // Validate contact exists before proceeding (for invoice creation)
+        // This is a best-effort check - invoice creation will validate again
+        if ($locationId) {
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+            
+            if (!is_wp_error($estimate)) {
+                $contactId = $estimate['contact']['id'] ?? null;
+                if (empty($contactId)) {
+                    $this->logger->warning('Estimate accepted but missing contact ID - invoice creation may fail', [
+                        'estimateId' => $estimateId,
+                        'locationId' => $locationId,
+                        'contact' => $estimate['contact'] ?? null,
+                    ]);
+                    // Don't fail acceptance, but log warning
+                } else {
+                    $this->logger->info('Estimate accepted with valid contact', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                    ]);
+                }
+            } else {
+                $this->logger->error('Failed to fetch estimate for contact validation', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+            }
+        } else {
+            $this->logger->warning('Estimate accepted without locationId - some features may not work', [
+                'estimateId' => $estimateId,
+            ]);
+        }
+
         // Update GHL signals (non-blocking - errors don't fail acceptance)
         if ($locationId) {
             $this->updateGhlSignals($estimateId, $locationId);
         }
+        
+        // Auto-provision account if needed (moved from getStatus for immediate provisioning)
+        $meta = $this->getMeta($estimateId);
+        $accountMeta = $meta['account'] ?? [];
+        if (($accountMeta['status'] ?? '') !== 'active') {
+            if ($locationId) {
+                $estimate = $this->estimateService->getEstimate([
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+                
+                if (!is_wp_error($estimate)) {
+                    $provisioned = $this->provisionAccount($estimateId, $estimate['contact'] ?? [], $locationId);
+                    if (!is_wp_error($provisioned)) {
+                        $meta = $this->getMeta($estimateId);
+                        $accountMeta = $meta['account'] ?? [];
+                        $this->logger->info('Account provisioned on estimate acceptance', [
+                            'estimateId' => $estimateId,
+                            'userId' => $accountMeta['userId'] ?? null,
+                        ]);
+                    } else {
+                        $this->logger->error('Failed to provision account on acceptance', [
+                            'estimateId' => $estimateId,
+                            'error' => $provisioned->get_error_message(),
+                        ]);
+                    }
+                }
+            }
+        } elseif (($accountMeta['status'] ?? '') === 'active' && !empty($accountMeta['userId'])) {
+            $this->attachEstimateToUser((int) $accountMeta['userId'], $estimateId, $locationId);
+        }
 
-        return [
-            'ok'        => true,
-            'quote'     => $status,
-            'ghlSynced' => false,
-            'ghlError'  => null,
-        ];
+            $this->logger->info('Estimate accepted successfully', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'acceptedAt' => $status['acceptedAt'],
+            ]);
+
+            return [
+                'ok'        => true,
+                'quote'     => $status,
+                'ghlSynced' => false,
+                'ghlError'  => null,
+            ];
+        } finally {
+            // Always release lock at the end, even if there's an error
+            delete_transient($lockKey);
+        }
     }
 
     /**
@@ -401,16 +561,98 @@ class PortalService
      */
     public function rejectEstimate(string $estimateId, string $locationId = '', string $reason = '')
     {
-        $status = [
-            'status'         => 'rejected',
-            'statusLabel'    => 'Rejected',
-            'rejectedAt'     => current_time('mysql'),
-            'rejectionReason' => sanitize_text_field($reason),
-            'canAccept'      => false,
-        ];
+        // Check current status - prevent invalid transitions
+        $meta = $this->getMeta($estimateId);
+        $currentStatus = $meta['quote']['status'] ?? 'sent';
+        
+        // Cannot reject if already accepted
+        if ($currentStatus === 'accepted') {
+            $this->logger->warning('Attempt to reject accepted estimate', [
+                'estimateId' => $estimateId,
+                'acceptedAt' => $meta['quote']['acceptedAt'] ?? null,
+            ]);
+            return new WP_Error(
+                'already_accepted',
+                __('This estimate has already been accepted and cannot be rejected. Please contact support if you need to change this.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // Already rejected - return existing status
+        if ($currentStatus === 'rejected') {
+            $this->logger->info('Estimate already rejected', [
+                'estimateId' => $estimateId,
+                'rejectedAt' => $meta['quote']['rejectedAt'] ?? null,
+            ]);
+            return [
+                'ok'        => true,
+                'quote'     => $meta['quote'],
+                'alreadyRejected' => true,
+                'ghlSynced' => false,
+                'ghlError'  => null,
+            ];
+        }
 
-        // Update WordPress meta first
-        $this->updateMeta($estimateId, ['quote' => $status]);
+        // Use WordPress transient for race condition protection (5 second lock)
+        $lockKey = 'ca_reject_lock_' . $estimateId;
+        $lockValue = get_transient($lockKey);
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 5 seconds - previous process likely crashed)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 5) {
+                // Lock is stale - clear it and proceed
+                delete_transient($lockKey);
+                $this->logger->warning('Cleared stale rejection lock', [
+                    'estimateId' => $estimateId,
+                    'lockAge' => $lockAge,
+                ]);
+            } else {
+                // Lock is active - another request is processing
+                $meta = $this->getMeta($estimateId);
+                $currentStatus = $meta['quote']['status'] ?? 'sent';
+                if ($currentStatus === 'rejected') {
+                    return [
+                        'ok'        => true,
+                        'quote'     => $meta['quote'],
+                        'alreadyRejected' => true,
+                        'ghlSynced' => false,
+                        'ghlError'  => null,
+                    ];
+                }
+                // If not rejected yet, return error to prevent duplicate processing
+                return new WP_Error(
+                    'processing',
+                    __('Another request is currently processing this estimate. Please wait a moment and try again.', 'cheapalarms'),
+                    ['status' => 409]
+                );
+            }
+        }
+        
+        // Set lock with timestamp
+        set_transient($lockKey, time(), 5);
+
+        try {
+            $status = [
+                'status'         => 'rejected',
+                'statusLabel'    => 'Rejected',
+                'rejectedAt'     => current_time('mysql'),
+                'rejectionReason' => sanitize_text_field($reason),
+                'canAccept'      => false,
+            ];
+
+            // Update WordPress meta first
+            $updateResult = $this->updateMeta($estimateId, ['quote' => $status]);
+            if (!$updateResult) {
+                $this->logger->error('Failed to update portal meta on rejection', [
+                    'estimateId' => $estimateId,
+                ]);
+                delete_transient($lockKey);
+                return new WP_Error(
+                    'update_failed',
+                    __('Failed to save rejection status. Please refresh the page and try again. If the problem persists, contact support.', 'cheapalarms'),
+                    ['status' => 500]
+                );
+            }
 
         // Get locationId from meta if not provided
         if (empty($locationId)) {
@@ -418,12 +660,22 @@ class PortalService
             $locationId = $meta['locationId'] ?? '';
         }
 
-        return [
-            'ok'        => true,
-            'quote'     => $status,
-            'ghlSynced' => false,
-            'ghlError'  => null,
-        ];
+            $this->logger->info('Estimate rejected', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'reason' => $reason ? 'provided' : 'not provided',
+            ]);
+
+            return [
+                'ok'        => true,
+                'quote'     => $status,
+                'ghlSynced' => false,
+                'ghlError'  => null,
+            ];
+        } finally {
+            // Always release lock at the end, even if there's an error
+            delete_transient($lockKey);
+        }
     }
 
     /**
@@ -435,24 +687,114 @@ class PortalService
      */
     public function createInvoiceForEstimate(string $estimateId, ?string $locationId = null, array $options = [])
     {
-        $meta  = $this->getMeta($estimateId);
-        $force = !empty($options['force']);
-        unset($options['force']);
-
-        if (!$force && !empty($meta['invoice']['id'])) {
-            return [
-                'invoice' => $meta['invoice'],
-                'exists'  => true,
-            ];
+        // Use WordPress transient for race condition protection (10 second lock)
+        $lockKey = 'ca_invoice_lock_' . $estimateId;
+        $lockValue = get_transient($lockKey);
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 10 seconds - previous process likely crashed)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 10) {
+                // Lock is stale - clear it and proceed
+                delete_transient($lockKey);
+                $this->logger->warning('Cleared stale invoice creation lock', [
+                    'estimateId' => $estimateId,
+                    'lockAge' => $lockAge,
+                ]);
+            } else {
+                // Lock is active - another request is processing
+                // Check if invoice was already created
+                $meta = $this->getMeta($estimateId);
+                if (!empty($meta['invoice']['id'])) {
+                    return [
+                        'invoice' => $meta['invoice'],
+                        'exists'  => true,
+                    ];
+                }
+                // If not created yet, return error to prevent duplicate processing
+                return new WP_Error(
+                    'processing',
+                    __('Another request is currently creating an invoice for this estimate. Please wait a moment and try again.', 'cheapalarms'),
+                    ['status' => 409]
+                );
+            }
         }
+
+        // Set lock with timestamp
+        set_transient($lockKey, time(), 10);
+
+        try {
+            $meta  = $this->getMeta($estimateId);
+            $force = !empty($options['force']);
+            unset($options['force']);
+
+            if (!$force && !empty($meta['invoice']['id'])) {
+                delete_transient($lockKey);
+                return [
+                    'invoice' => $meta['invoice'],
+                    'exists'  => true,
+                ];
+            }
 
         $resolvedLocation = $locationId ?: ($meta['locationId'] ?? '');
         if (!$resolvedLocation) {
-            return new WP_Error('missing_location', __('Location ID required to create invoice.', 'cheapalarms'), ['status' => 400]);
+            // Fallback to config default location
+            $resolvedLocation = $this->config->getLocationId();
+            if (!$resolvedLocation) {
+                return new WP_Error('missing_location', __('Location ID required to create invoice.', 'cheapalarms'), ['status' => 400]);
+            }
+            // Store resolved location in meta for future use
+            $this->updateMeta($estimateId, ['locationId' => $resolvedLocation]);
         }
 
         // Create invoice directly from draft estimate (no need to accept estimate first)
-        $response = $this->estimateService->createInvoiceFromDraftEstimate($estimateId, $resolvedLocation, $options);
+        // Add retry logic for transient GHL errors
+        $maxRetries = 2;
+        $attempt = 0;
+        $response = null;
+        
+        while ($attempt <= $maxRetries) {
+            $response = $this->estimateService->createInvoiceFromDraftEstimate($estimateId, $resolvedLocation, $options);
+            
+            if (!is_wp_error($response)) {
+                // Success - break out of retry loop
+                break;
+            }
+            
+            // Check if this is a transient error that might benefit from retry
+            $errorCode = $response->get_error_code();
+            $errorMessage = $response->get_error_message();
+            $errorData = $response->get_error_data();
+            $httpCode = $errorData['code'] ?? null;
+            
+            $isTransientError = (
+                strpos($errorMessage, 'SSL') !== false ||
+                strpos($errorMessage, 'SSL_ERROR') !== false ||
+                strpos($errorMessage, 'Connection timed out') !== false ||
+                strpos($errorMessage, 'cURL error 35') !== false ||
+                strpos($errorMessage, 'cURL error 28') !== false ||
+                $errorCode === 'ghl_connection_error' ||
+                $errorCode === 'ghl_ssl_error' ||
+                $errorCode === 'ghl_timeout' ||
+                ($httpCode && $httpCode >= 500 && $httpCode < 600) // 5xx server errors
+            );
+            
+            // If not a transient error or max retries reached, return error
+            if (!$isTransientError || $attempt >= $maxRetries) {
+                return $response;
+            }
+            
+            // Wait before retry (exponential backoff: 1s, 2s)
+            $waitTime = pow(2, $attempt) * 1000000; // microseconds
+            usleep($waitTime);
+            $attempt++;
+            
+            $this->logger->warning('Retrying invoice creation after transient error', [
+                'estimateId' => $estimateId,
+                'attempt' => $attempt,
+                'error' => $errorMessage,
+            ]);
+        }
+        
         if (is_wp_error($response)) {
             return $response;
         }
@@ -461,10 +803,16 @@ class PortalService
         $invoice = $this->normaliseInvoiceResponse($payload);
 
         if (!$invoice['id']) {
-            $this->logger->warning('GHL invoice response missing identifier', [
+            // Invoice ID is critical - return error instead of just warning
+            $this->logger->error('GHL invoice response missing identifier', [
                 'estimateId' => $estimateId,
                 'payload'    => $payload,
             ]);
+            return new WP_Error(
+                'invalid_invoice_response',
+                __('Invoice was created in GoHighLevel but the response was missing required information. Please contact support with the estimate number for assistance.', 'cheapalarms'),
+                ['status' => 500, 'payload' => $payload]
+            );
         }
 
         $this->updateMeta($estimateId, ['invoice' => $invoice]);
@@ -477,6 +825,10 @@ class PortalService
         return [
             'invoice' => $invoice,
         ];
+        } finally {
+            // Always release lock at the end, even if there's an error
+            delete_transient($lockKey);
+        }
     }
 
     private function extractGhlErrorMessage(WP_Error $error): string
@@ -766,17 +1118,97 @@ class PortalService
     {
         $stored = get_option(self::OPTION_PREFIX . $estimateId, '{}');
         $decoded = json_decode($stored, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->logger->warning('Failed to decode portal meta JSON', [
+                'estimateId' => $estimateId,
+                'error' => json_last_error_msg(),
+            ]);
+            return [];
+        }
         if (!is_array($decoded)) {
             return [];
         }
         return $decoded;
     }
 
-    private function updateMeta(string $estimateId, array $changes): void
+    private function updateMeta(string $estimateId, array $changes): bool
     {
-        $current = $this->getMeta($estimateId);
-        $merged  = array_merge($current, $changes);
-        update_option(self::OPTION_PREFIX . $estimateId, wp_json_encode($merged), false);
+        // Use a lock to prevent race conditions during meta updates
+        $lockKey = 'ca_meta_update_lock_' . $estimateId;
+        $maxAttempts = 5;
+        $attempt = 0;
+        
+        while ($attempt < $maxAttempts) {
+            // Try to acquire lock (1 second timeout)
+            $lockValue = get_transient($lockKey);
+            if ($lockValue !== false) {
+                // Lock exists - wait a bit and retry
+                usleep(200000); // 200ms
+                $attempt++;
+                continue;
+            }
+            
+            // Acquire lock
+            set_transient($lockKey, time(), 1);
+            
+            try {
+                // Get current meta (fresh read)
+                $current = $this->getMeta($estimateId);
+                
+                // Deep merge to preserve nested structures
+                $merged = $this->deepMerge($current, $changes);
+                
+                // Update atomically
+                $result = update_option(self::OPTION_PREFIX . $estimateId, wp_json_encode($merged), false);
+                
+                // Release lock
+                delete_transient($lockKey);
+                
+                if (!$result) {
+                    $this->logger->warning('Failed to update portal meta', [
+                        'estimateId' => $estimateId,
+                        'changes' => array_keys($changes),
+                    ]);
+                }
+                return $result;
+            } catch (\Exception $e) {
+                // Release lock on error
+                delete_transient($lockKey);
+                $this->logger->error('Exception updating portal meta', [
+                    'estimateId' => $estimateId,
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
+            }
+        }
+        
+        // Failed to acquire lock after max attempts
+        $this->logger->warning('Failed to acquire meta update lock after max attempts', [
+            'estimateId' => $estimateId,
+            'attempts' => $maxAttempts,
+        ]);
+        return false;
+    }
+
+    /**
+     * Deep merge arrays, preserving nested structures.
+     * 
+     * @param array<string, mixed> $current
+     * @param array<string, mixed> $changes
+     * @return array<string, mixed>
+     */
+    private function deepMerge(array $current, array $changes): array
+    {
+        foreach ($changes as $key => $value) {
+            if (isset($current[$key]) && is_array($current[$key]) && is_array($value)) {
+                // Recursively merge nested arrays
+                $current[$key] = $this->deepMerge($current[$key], $value);
+            } else {
+                // Overwrite or add new value
+                $current[$key] = $value;
+            }
+        }
+        return $current;
     }
 
     public function validateInviteToken(string $estimateId, string $token): bool
