@@ -132,6 +132,8 @@ class EstimateService
                     'estimateNumber' => $record['estimateNumber'] ?? null,
                     'email'          => $email,
                     'status'         => $status,
+                    'total'          => (float)($record['total'] ?? 0),
+                    'currency'       => $record['currency'] ?? 'AUD',
                     'createdAt'      => $record['createdAt'] ?? '',
                     'updatedAt'      => $record['updatedAt'] ?? '',
                     'inviteToken'    => $inviteToken,
@@ -331,6 +333,47 @@ class EstimateService
         $response = $this->client->post(
             '/invoices/',
             $invoicePayload,
+            30,
+            $locationId
+        );
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        return ['ok' => true, 'result' => $response];
+    }
+
+    /**
+     * Send estimate via GHL API.
+     *
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $options Optional options (method: 'email'|'sms', etc.)
+     * @return array|WP_Error
+     */
+    public function sendEstimate(string $estimateId, string $locationId, array $options = [])
+    {
+        $estimateId = sanitize_text_field($estimateId);
+        $locationId = sanitize_text_field($locationId ?: $this->config->getLocationId());
+
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId is required to send.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        if (!$locationId) {
+            return new WP_Error('missing_location', __('Location ID required to send estimate.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $payload = array_merge([
+            'altId'   => $locationId,
+            'altType' => 'location',
+        ], $options);
+
+        // GHL API: POST /invoices/estimate/{id}/send
+        $response = $this->client->post(
+            '/invoices/estimate/' . rawurlencode($estimateId) . '/send',
+            $payload,
             30,
             $locationId
         );

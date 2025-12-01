@@ -53,8 +53,8 @@ class PortalService
             $estimates[] = [
                 'estimateId'   => $item['estimateId'] ?? null,
                 'locationId'   => $item['locationId'] ?? null,
-                'status'       => $item['quote']['status'] ?? 'pending',
-                'statusLabel'  => $item['quote']['statusLabel'] ?? 'Pending',
+                'status'       => $item['quote']['status'] ?? 'sent',
+                'statusLabel'  => $item['quote']['statusLabel'] ?? 'Sent',
                 'number'       => $item['quote']['number'] ?? ($item['estimateId'] ?? null),
                 'acceptedAt'   => $item['quote']['acceptedAt'] ?? null,
                 'portalUrl'    => $item['account']['portalUrl'] ?? null,
@@ -135,8 +135,9 @@ class PortalService
 
         // Portal meta is the source of truth for acceptance
         // Check portal meta FIRST (customer accepted in portal)
-        $portalMetaStatus = $meta['quote']['status'] ?? 'pending';
+        $portalMetaStatus = $meta['quote']['status'] ?? 'sent';
         $isAcceptedInPortal = $portalMetaStatus === 'accepted';
+        $isRejectedInPortal = $portalMetaStatus === 'rejected';
         
         // Only check GHL status if portal meta doesn't have acceptance
         // (for cases where estimate was accepted directly in GHL)
@@ -147,13 +148,13 @@ class PortalService
         $isAccepted = $isAcceptedInPortal || $isAcceptedInGhl;
 
         $quoteStatus = [
-            'status'      => $isAccepted ? 'accepted' : 'pending',
+            'status'      => $isAccepted ? 'accepted' : ($isRejectedInPortal ? 'rejected' : 'sent'),
             'statusLabel' => $isAcceptedInPortal 
                 ? 'Accepted' 
-                : ($isAcceptedInGhl ? 'Accepted via GHL' : 'Awaiting approval'),
+                : ($isAcceptedInGhl ? 'Accepted via GHL' : ($isRejectedInPortal ? 'Rejected' : 'Sent')),
             'number'      => $estimate['estimateNumber'] ?? $estimate['estimateId'],
             'acceptedAt'  => $meta['quote']['acceptedAt'] ?? null,
-            'canAccept'   => !$isAccepted, // Can't accept if already accepted
+            'canAccept'   => !$isAccepted && !$isRejectedInPortal, // Can't accept if already accepted or rejected
         ];
         
         // If accepted in portal but no acceptedAt timestamp, set it

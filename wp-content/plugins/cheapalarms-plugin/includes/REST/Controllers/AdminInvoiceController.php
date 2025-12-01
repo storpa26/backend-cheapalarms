@@ -76,6 +76,25 @@ class AdminInvoiceController extends AdminController
                 ],
             ],
         ]);
+
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/send', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->sendInvoice($request);
+            },
+            'args'                => [
+                'invoiceId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
     }
 
     /**
@@ -131,6 +150,15 @@ class AdminInvoiceController extends AdminController
 
             // Find linked estimate by searching portal meta
             $linkedEstimateId = $this->findEstimateIdByInvoiceId($invoiceId);
+            
+            // Get portal status from linked estimate meta
+            $portalStatus = 'sent';
+            if ($linkedEstimateId) {
+                $meta = $this->getPortalMeta($linkedEstimateId);
+                if (!empty($meta)) {
+                    $portalStatus = $meta['invoice']['status'] ?? $meta['quote']['status'] ?? 'sent';
+                }
+            }
 
             $out[] = [
                 'id'                => $invoiceId,
@@ -140,7 +168,8 @@ class AdminInvoiceController extends AdminController
                 'total'             => $item['total'] ?? 0,
                 'amountDue'         => $item['amountDue'] ?? 0,
                 'currency'          => $item['currency'] ?? 'AUD',
-                'status'            => $item['status'] ?? 'draft',
+                'ghlStatus'         => $item['status'] ?? 'draft',
+                'portalStatus'      => $portalStatus,
                 'linkedEstimateId'  => $linkedEstimateId,
                 'createdAt'         => $item['createdAt'] ?? '',
                 'updatedAt'         => $item['updatedAt'] ?? '',
@@ -174,9 +203,36 @@ class AdminInvoiceController extends AdminController
             return $this->respond($invoice);
         }
 
-        // Find linked estimate
+        // Find linked estimate - improved lookup with better error handling
         $linkedEstimateId = $this->findEstimateIdByInvoiceId($invoiceId);
         $linkedEstimate = null;
+        $portalStatus = 'sent';
+        
+        // Try to find estimate ID from portal meta
+        if (!$linkedEstimateId) {
+            // Fallback: search all portal meta for this invoice ID
+            // This handles cases where the reverse lookup might have failed
+            global $wpdb;
+            $optionNamePattern = 'ca_portal_meta_%';
+            $results = $wpdb->get_results($wpdb->prepare(
+                "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
+                $optionNamePattern
+            ));
+            
+            foreach ($results as $row) {
+                $meta = json_decode($row->option_value, true);
+                if (!is_array($meta)) {
+                    continue;
+                }
+                
+                $metaInvoiceId = $meta['invoice']['id'] ?? null;
+                if ($metaInvoiceId === $invoiceId) {
+                    $linkedEstimateId = str_replace('ca_portal_meta_', '', $row->option_name);
+                    break;
+                }
+            }
+        }
+        
         if ($linkedEstimateId) {
             // Get basic estimate info from portal meta
             $meta = $this->getPortalMeta($linkedEstimateId);
@@ -185,6 +241,8 @@ class AdminInvoiceController extends AdminController
                     'id'             => $linkedEstimateId,
                     'estimateNumber' => $meta['quote']['number'] ?? $linkedEstimateId,
                 ];
+                // Get portal status from invoice meta (if stored) or estimate status
+                $portalStatus = $meta['invoice']['status'] ?? $meta['quote']['status'] ?? 'sent';
             }
         }
 
@@ -193,7 +251,8 @@ class AdminInvoiceController extends AdminController
             'id'            => $invoice['id'] ?? $invoiceId,
             'invoiceNumber' => $invoice['invoiceNumber'] ?? null,
             'title'         => $invoice['title'] ?? 'INVOICE',
-            'status'        => $invoice['status'] ?? 'draft',
+            'ghlStatus'    => $invoice['status'] ?? 'draft',
+            'portalStatus' => $portalStatus,
             'contact'       => $invoice['contact'] ?? [],
             'items'         => $invoice['items'] ?? [],
             'subtotal'      => $invoice['subtotal'] ?? 0,
@@ -208,6 +267,7 @@ class AdminInvoiceController extends AdminController
             'updatedAt'     => $invoice['updatedAt'] ?? '',
             'payments'      => $invoice['payments'] ?? [],
             'linkedEstimate' => $linkedEstimate,
+            'linkedEstimateId' => $linkedEstimateId, // Also return ID directly for easier access
         ]);
     }
 
@@ -230,6 +290,33 @@ class AdminInvoiceController extends AdminController
         }
 
         return $this->getInvoice($request); // Reuse getInvoice logic
+    }
+
+    /**
+     * Send invoice via GHL.
+     */
+    public function sendInvoice(WP_REST_Request $request): WP_REST_Response
+    {
+        $invoiceId = sanitize_text_field($request->get_param('invoiceId'));
+        $locationIdResult = $this->resolveLocationId($request);
+        if (is_wp_error($locationIdResult)) {
+            return $this->respond($locationIdResult);
+        }
+        $locationId = $locationIdResult;
+
+        // Get optional send method from request body
+        $body = $request->get_json_params();
+        $options = $body ?? [];
+
+        $result = $this->invoiceService->sendInvoice($invoiceId, $locationId, $options);
+        if (is_wp_error($result)) {
+            return $this->respond($result);
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'message' => 'Invoice sent successfully',
+        ]);
     }
 
 }
