@@ -17,12 +17,13 @@ class GhlClient
     }
 
     /**
-     * Perform a GET request.
+     * Perform a GET request with retry logic for transient errors.
      *
      * @param array<string, mixed> $query
      * @param string|null $locationId Optional location ID to pass as header
+     * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function get(string $path, array $query = [], int $timeout = 25, ?string $locationId = null)
+    public function get(string $path, array $query = [], int $timeout = 25, ?string $locationId = null, int $maxRetries = 2)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
@@ -40,53 +41,158 @@ class GhlClient
             ]);
         }
 
-        $response = wp_remote_get($url, [
-            'headers' => $headers,
-            'timeout' => $timeout,
-        ]);
+        $attempt = 0;
+        $lastError = null;
 
-        return $this->processResponse($response, $url);
+        while ($attempt <= $maxRetries) {
+            $response = wp_remote_get($url, [
+                'headers' => $headers,
+                'timeout' => $timeout,
+                'sslverify' => true, // Keep SSL verification enabled for security
+                'redirection' => 5,
+            ]);
+
+            // If successful or non-transient error, return immediately
+            if (!is_wp_error($response)) {
+                return $this->processResponse($response, $url);
+            }
+
+            $errorCode = $response->get_error_code();
+            $errorMessage = $response->get_error_message();
+
+            // Check if this is a transient SSL/network error that might benefit from retry
+            $isTransientError = (
+                strpos($errorMessage, 'SSL') !== false ||
+                strpos($errorMessage, 'SSL_ERROR') !== false ||
+                strpos($errorMessage, 'SSL_connect') !== false ||
+                strpos($errorMessage, 'Connection timed out') !== false ||
+                strpos($errorMessage, 'cURL error 35') !== false ||
+                strpos($errorMessage, 'cURL error 28') !== false ||
+                $errorCode === 'http_request_failed'
+            );
+
+            $lastError = $response;
+
+            // If not a transient error or max retries reached, return error
+            if (!$isTransientError || $attempt >= $maxRetries) {
+                break;
+            }
+
+            // Wait before retry (exponential backoff: 1s, 2s)
+            $waitTime = pow(2, $attempt) * 1000000; // microseconds
+            usleep($waitTime);
+            $attempt++;
+
+            $this->logger->warning('GHL API retry attempt', [
+                'url' => $url,
+                'attempt' => $attempt,
+                'error' => $errorMessage,
+            ]);
+        }
+
+        // All retries failed - return user-friendly error
+        return $this->handleSslError($lastError, $url);
     }
 
     /**
-     * Perform a POST request.
+     * Perform a POST request with retry logic for transient errors.
      *
      * @param array<string, mixed> $body
      * @param string|null $locationId Optional location ID to pass as header
+     * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function post(string $path, array $body, int $timeout = 30, ?string $locationId = null)
+    public function post(string $path, array $body, int $timeout = 30, ?string $locationId = null, int $maxRetries = 2)
     {
         $url = self::BASE_URL . $path;
-        $response = wp_remote_post($url, [
-            'headers' => $this->headers($locationId),
-            'timeout' => $timeout,
-            'body'    => wp_json_encode($body),
-        ]);
+        $attempt = 0;
+        $lastError = null;
 
-        return $this->processResponse($response, $url, $body);
+        while ($attempt <= $maxRetries) {
+            $response = wp_remote_post($url, [
+                'headers' => $this->headers($locationId),
+                'timeout' => $timeout,
+                'body'    => wp_json_encode($body),
+                'sslverify' => true,
+                'redirection' => 5,
+            ]);
+
+            if (!is_wp_error($response)) {
+                return $this->processResponse($response, $url, $body);
+            }
+
+            $errorMessage = $response->get_error_message();
+            $isTransientError = (
+                strpos($errorMessage, 'SSL') !== false ||
+                strpos($errorMessage, 'SSL_ERROR') !== false ||
+                strpos($errorMessage, 'Connection timed out') !== false ||
+                strpos($errorMessage, 'cURL error 35') !== false ||
+                strpos($errorMessage, 'cURL error 28') !== false
+            );
+
+            $lastError = $response;
+
+            if (!$isTransientError || $attempt >= $maxRetries) {
+                break;
+            }
+
+            usleep(pow(2, $attempt) * 1000000);
+            $attempt++;
+        }
+
+        return $this->handleSslError($lastError, $url);
     }
 
     /**
-     * Perform a PUT request.
+     * Perform a PUT request with retry logic for transient errors.
      *
      * @param array<string, mixed> $body
      * @param string|null $locationId Optional location ID to pass as header
+     * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function put(string $path, array $body, array $query = [], int $timeout = 30, ?string $locationId = null)
+    public function put(string $path, array $body, array $query = [], int $timeout = 30, ?string $locationId = null, int $maxRetries = 2)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
             $url .= '?' . http_build_query($query);
         }
 
-        $response = wp_remote_request($url, [
-            'method'  => 'PUT',
-            'headers' => $this->headers($locationId),
-            'timeout' => $timeout,
-            'body'    => wp_json_encode($body),
-        ]);
+        $attempt = 0;
+        $lastError = null;
 
-        return $this->processResponse($response, $url, $body);
+        while ($attempt <= $maxRetries) {
+            $response = wp_remote_request($url, [
+                'method'  => 'PUT',
+                'headers' => $this->headers($locationId),
+                'timeout' => $timeout,
+                'body'    => wp_json_encode($body),
+                'sslverify' => true,
+                'redirection' => 5,
+            ]);
+
+            if (!is_wp_error($response)) {
+                return $this->processResponse($response, $url, $body);
+            }
+
+            $errorMessage = $response->get_error_message();
+            $isTransientError = (
+                strpos($errorMessage, 'SSL') !== false ||
+                strpos($errorMessage, 'SSL_ERROR') !== false ||
+                strpos($errorMessage, 'Connection timed out') !== false ||
+                strpos($errorMessage, 'cURL error 35') !== false ||
+                strpos($errorMessage, 'cURL error 28') !== false
+            );
+
+            $lastError = $response;
+
+            if (!$isTransientError || $attempt >= $maxRetries) {
+                break;
+            }
+
+            usleep(pow(2, $attempt) * 1000000);
+            $attempt++;
+        }
+
+        return $this->handleSslError($lastError, $url);
     }
 
     /**
@@ -107,6 +213,55 @@ class GhlClient
         }
 
         return $headers;
+    }
+
+    /**
+     * Handle SSL/connection errors with user-friendly messages.
+     */
+    private function handleSslError(WP_Error $error, string $url): WP_Error
+    {
+        $errorMessage = $error->get_error_message();
+        $errorCode = $error->get_error_code();
+
+        $this->logger->error('GHL SSL/Connection error', [
+            'url' => $url,
+            'error_code' => $errorCode,
+            'error_message' => $errorMessage,
+        ]);
+
+        // Provide user-friendly error messages
+        if (strpos($errorMessage, 'SSL') !== false || strpos($errorMessage, 'SSL_ERROR') !== false) {
+            return new WP_Error(
+                'ghl_ssl_error',
+                'Unable to connect to GoHighLevel API due to SSL certificate issue. Please check your server\'s SSL configuration or contact your hosting provider.',
+                [
+                    'original_error' => $errorMessage,
+                    'error_code' => $errorCode,
+                    'help' => 'This is usually caused by: 1) Outdated SSL certificates on your server, 2) Firewall blocking the connection, 3) Network connectivity issues. Contact your hosting provider for assistance.',
+                ]
+            );
+        }
+
+        if (strpos($errorMessage, 'Connection timed out') !== false || strpos($errorMessage, 'cURL error 28') !== false) {
+            return new WP_Error(
+                'ghl_timeout',
+                'Connection to GoHighLevel API timed out. The service may be temporarily unavailable. Please try again in a few moments.',
+                [
+                    'original_error' => $errorMessage,
+                    'error_code' => $errorCode,
+                ]
+            );
+        }
+
+        // Generic connection error
+        return new WP_Error(
+            'ghl_connection_error',
+            'Unable to connect to GoHighLevel API. Please check your internet connection and try again.',
+            [
+                'original_error' => $errorMessage,
+                'error_code' => $errorCode,
+            ]
+        );
     }
 
     /**

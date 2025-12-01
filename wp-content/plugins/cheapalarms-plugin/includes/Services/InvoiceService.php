@@ -3,6 +3,7 @@
 namespace CheapAlarms\Plugin\Services;
 
 use CheapAlarms\Plugin\Config\Config;
+use CheapAlarms\Plugin\Services\Logger;
 use WP_Error;
 
 use function sanitize_text_field;
@@ -34,9 +35,12 @@ class InvoiceService
         $offset = max(0, (int)($filters['offset'] ?? 0));
 
         // Build query params - GHL invoice list endpoint
+        // GHL requires altId and altType for multi-location accounts (same as estimates)
         $query = [
-            'limit'  => $limit,
-            'offset' => $offset,
+            'altId'   => $locationId,
+            'altType' => 'location',
+            'limit'   => $limit,
+            'offset'  => $offset,
         ];
 
         // Add status filter if provided
@@ -105,7 +109,13 @@ class InvoiceService
             return new WP_Error('missing_location', __('Location ID is required.', 'cheapalarms'), ['status' => 400]);
         }
 
-        $response = $this->client->get('/invoices/' . rawurlencode($invoiceId), [], 25, $locationId);
+        // GHL requires altId and altType query params for multi-location accounts
+        $query = [
+            'altId'   => $locationId,
+            'altType' => 'location',
+        ];
+
+        $response = $this->client->get('/invoices/' . rawurlencode($invoiceId), $query, 25, $locationId);
         if (is_wp_error($response)) {
             return $response;
         }
@@ -114,7 +124,23 @@ class InvoiceService
 
         // Normalize invoice data
         $contact = $invoice['contact'] ?? $invoice['contactDetails'] ?? [];
-        $items   = $invoice['items'] ?? [];
+        
+        // Extract items - handle different GHL response structures
+        $items = $invoice['items'] ?? $invoice['lineItems'] ?? $invoice['invoiceItems'] ?? [];
+        
+        // Ensure items is an array
+        if (!is_array($items)) {
+            $items = [];
+        }
+        
+        // If items is empty but invoice has a total, log for debugging
+        if (empty($items) && !empty($invoice['total']) && $invoice['total'] > 0) {
+            $this->logger->warning('Invoice has total but no items', [
+                'invoiceId' => $invoiceId,
+                'total' => $invoice['total'],
+                'raw_keys' => array_keys($invoice),
+            ]);
+        }
 
         return [
             'ok'            => true,
@@ -154,6 +180,46 @@ class InvoiceService
     public function syncInvoice(string $invoiceId, string $locationId = '')
     {
         return $this->getInvoice($invoiceId, $locationId);
+    }
+
+    /**
+     * Send invoice via GHL API.
+     *
+     * @param string $invoiceId Invoice ID
+     * @param string $locationId Location ID (defaults to config)
+     * @param array<string, mixed> $options Optional options (method: 'email'|'sms', etc.)
+     * @return array|WP_Error
+     */
+    public function sendInvoice(string $invoiceId, string $locationId = '', array $options = [])
+    {
+        $invoiceId = sanitize_text_field($invoiceId);
+        if (!$invoiceId) {
+            return new WP_Error('bad_request', __('Invoice ID is required to send.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        if (!$locationId) {
+            return new WP_Error('missing_location', __('Location ID is required to send invoice.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $payload = array_merge([
+            'altId'   => $locationId,
+            'altType' => 'location',
+        ], $options);
+
+        // GHL API: POST /invoices/{id}/send
+        $response = $this->client->post(
+            '/invoices/' . rawurlencode($invoiceId) . '/send',
+            $payload,
+            30,
+            $locationId
+        );
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        return ['ok' => true, 'result' => $response];
     }
 }
 

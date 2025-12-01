@@ -101,6 +101,25 @@ class AdminEstimateController extends AdminController
                 ],
             ],
         ]);
+
+        register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)/send', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->sendEstimate($request);
+            },
+            'args'                => [
+                'estimateId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
     }
 
     /**
@@ -130,15 +149,17 @@ class AdminEstimateController extends AdminController
         $out   = [];
 
         // Merge portal meta and apply filters
+        // NOTE: We DON'T fetch full estimates here to keep it fast
+        // Full data is available on the detail page
         foreach ($items as $item) {
             $estimateId = $item['id'] ?? null;
             if (!$estimateId) {
                 continue;
             }
 
-            // Get portal meta
+            // Get portal meta (fast, cached)
             $meta = $this->getPortalMeta($estimateId);
-            $portalStatusValue = $meta['quote']['status'] ?? 'pending';
+            $portalStatusValue = $meta['quote']['status'] ?? 'sent';
 
             // Apply filters
             if ($status && ($item['status'] ?? '') !== $status) {
@@ -148,14 +169,26 @@ class AdminEstimateController extends AdminController
                 continue;
             }
             if ($search) {
-                $searchLower = strtolower($search);
                 $matches = false;
                 $matches = $matches || (isset($item['estimateNumber']) && stripos((string)$item['estimateNumber'], $search) !== false);
                 $matches = $matches || (isset($item['email']) && stripos($item['email'], $search) !== false);
-                // We'd need to fetch full estimate for name search - skip for now or do it
                 if (!$matches) {
                     continue;
                 }
+            }
+
+            // Get data from portal meta cache (fast) - no API calls
+            $contactName = $meta['quote']['contactName'] ?? '';
+            $contactEmail = $item['email'] ?? '';
+            
+            // Get total: prefer portal meta, fallback to GHL estimate data
+            $total = (float)($meta['quote']['total'] ?? $item['total'] ?? 0);
+            $currency = $meta['quote']['currency'] ?? $item['currency'] ?? 'AUD';
+            $title = $meta['quote']['title'] ?? 'ESTIMATE';
+            
+            // Fallback: use email as name if name is empty
+            if (empty($contactName) && !empty($contactEmail)) {
+                $contactName = $contactEmail;
             }
 
             // Get linked invoice from meta
@@ -164,17 +197,49 @@ class AdminEstimateController extends AdminController
             $out[] = [
                 'id'             => $estimateId,
                 'estimateNumber' => $item['estimateNumber'] ?? null,
-                'title'          => 'ESTIMATE', // Would need full estimate for title
-                'contactName'    => '', // Would need full estimate for name
-                'contactEmail'   => $item['email'] ?? '',
-                'total'          => 0, // Would need full estimate for total
-                'currency'       => 'AUD',
+                'title'          => $title,
+                'contactName'    => $contactName ?: ($contactEmail ?: 'N/A'),
+                'contactEmail'   => $contactEmail,
+                'total'          => $total,
+                'currency'       => $currency,
                 'ghlStatus'      => $item['status'] ?? 'draft',
                 'portalStatus'   => $portalStatusValue,
                 'linkedInvoiceId' => $linkedInvoice['id'] ?? null,
                 'createdAt'      => $item['createdAt'] ?? '',
                 'updatedAt'      => $item['updatedAt'] ?? '',
             ];
+        }
+
+        // Calculate summary totals from ALL estimates (before pagination)
+        $summary = [
+            'sent' => ['count' => 0, 'total' => 0.0],
+            'accepted' => ['count' => 0, 'total' => 0.0],
+            'rejected' => ['count' => 0, 'total' => 0.0],
+            'invoiced' => ['count' => 0, 'total' => 0.0],
+        ];
+
+        foreach ($out as $item) {
+            $status = $item['portalStatus'] ?? 'sent';
+            $total = (float)($item['total'] ?? 0);
+            
+            // Count by status
+            if ($status === 'accepted') {
+                $summary['accepted']['count']++;
+                $summary['accepted']['total'] += $total;
+            } elseif ($status === 'rejected') {
+                $summary['rejected']['count']++;
+                $summary['rejected']['total'] += $total;
+            } else {
+                // Default to 'sent' for any other status
+                $summary['sent']['count']++;
+                $summary['sent']['total'] += $total;
+            }
+            
+            // Count invoiced (can overlap with other statuses)
+            if (!empty($item['linkedInvoiceId'])) {
+                $summary['invoiced']['count']++;
+                $summary['invoiced']['total'] += $total;
+            }
         }
 
         // Apply pagination
@@ -188,6 +253,7 @@ class AdminEstimateController extends AdminController
             'total'    => $total,
             'page'     => $page,
             'pageSize' => $pageSize,
+            'summary'  => $summary,
         ]);
     }
 
@@ -216,17 +282,16 @@ class AdminEstimateController extends AdminController
         // Get portal meta
         $meta = $this->getPortalMeta($estimateId);
 
-        // Get linked invoice if exists
+        // Return linked invoice ID only (lazy loading - fetch details on demand)
+        // This avoids blocking the estimate load with another slow GHL API call
+        $linkedInvoiceId = $meta['invoice']['id'] ?? null;
         $linkedInvoice = null;
-        if (!empty($meta['invoice']['id'])) {
-            // Use locationId from request or fallback to config default
-            $effectiveLocationId = $locationId ?: $this->locationResolver->resolve(null);
-            if ($effectiveLocationId) {
-                $invoiceResult = $this->invoiceService->getInvoice($meta['invoice']['id'], $effectiveLocationId);
-                if (!is_wp_error($invoiceResult)) {
-                    $linkedInvoice = $invoiceResult;
-                }
-            }
+        if ($linkedInvoiceId) {
+            // Return minimal invoice info - full details can be fetched separately if needed
+            $linkedInvoice = [
+                'id' => $linkedInvoiceId,
+                'invoiceNumber' => $meta['invoice']['number'] ?? null,
+            ];
         }
 
         // Build normalized response
@@ -238,7 +303,7 @@ class AdminEstimateController extends AdminController
             'estimateNumber' => $estimate['estimateNumber'] ?? $estimateId,
             'title'         => $estimate['title'] ?? $estimate['name'] ?? 'ESTIMATE',
             'ghlStatus'     => $estimate['status'] ?? 'draft',
-            'portalStatus'  => $meta['quote']['status'] ?? 'pending',
+            'portalStatus'  => $meta['quote']['status'] ?? 'sent',
             'contact'       => [
                 'id'    => $contact['id'] ?? $contact['contactId'] ?? null,
                 'name'  => $contact['name'] ?? (($contact['firstName'] ?? '') . ' ' . ($contact['lastName'] ?? '')),
@@ -312,6 +377,37 @@ class AdminEstimateController extends AdminController
             'ok'     => true,
             'invoice' => $result['invoice'] ?? null,
             'exists'  => $result['exists'] ?? false,
+        ]);
+    }
+
+    /**
+     * Send estimate via GHL.
+     */
+    public function sendEstimate(WP_REST_Request $request): WP_REST_Response
+    {
+        $estimateId = sanitize_text_field($request->get_param('estimateId'));
+        $locationId = $this->resolveLocationIdOptional($request);
+
+        if (!$locationId) {
+            $locationId = $this->locationResolver->resolve(null);
+        }
+
+        if (!$locationId) {
+            return $this->respond(new WP_Error('missing_location', __('Location ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        // Get optional send method from request body
+        $body = $request->get_json_params();
+        $options = $body ?? [];
+
+        $result = $this->estimateService->sendEstimate($estimateId, $locationId, $options);
+        if (is_wp_error($result)) {
+            return $this->respond($result);
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'message' => 'Estimate sent successfully',
         ]);
     }
 
