@@ -73,6 +73,16 @@ abstract class AdminController implements ControllerInterface
     }
 
     /**
+     * Update portal meta for an estimate.
+     *
+     * @param array<string, mixed> $data
+     */
+    protected function updatePortalMeta(string $estimateId, array $data): bool
+    {
+        return $this->portalMeta->merge($estimateId, $data);
+    }
+
+    /**
      * Find estimate ID that has this invoice ID in its portal meta.
      * This is a reverse lookup - searches all portal meta options.
      *
@@ -92,10 +102,15 @@ abstract class AdminController implements ControllerInterface
     {
         if (is_wp_error($result)) {
             $status = $result->get_error_data()['status'] ?? 500;
+            $errorData = $result->get_error_data();
             return new WP_REST_Response([
                 'ok'   => false,
-                'err'  => $result->get_error_message(),
+                'error' => $result->get_error_message(), // Standardized to 'error' instead of 'err'
                 'code' => $result->get_error_code(),
+                // Include 'err' for backward compatibility
+                'err'  => $result->get_error_message(),
+                // Include error details if available
+                'details' => $errorData['details'] ?? null,
             ], $status);
         }
 

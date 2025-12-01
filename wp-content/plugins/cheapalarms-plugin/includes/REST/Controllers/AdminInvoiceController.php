@@ -208,7 +208,7 @@ class AdminInvoiceController extends AdminController
         $linkedEstimate = null;
         $portalStatus = 'sent';
         
-        // Try to find estimate ID from portal meta
+        // Try to find estimate ID from portal meta (direct lookup)
         if (!$linkedEstimateId) {
             // Fallback: search all portal meta for this invoice ID
             // This handles cases where the reverse lookup might have failed
@@ -229,6 +229,32 @@ class AdminInvoiceController extends AdminController
                 if ($metaInvoiceId === $invoiceId) {
                     $linkedEstimateId = str_replace('ca_portal_meta_', '', $row->option_name);
                     break;
+                }
+            }
+        }
+        
+        // Final fallback: Try to match by contact ID and date (for manually created invoices)
+        // Only attempt if invoice has contact info and issue date
+        $invoiceContact = $invoice['contact'] ?? [];
+        $invoiceContactId = $invoiceContact['id'] ?? null;
+        $invoiceDate = $invoice['issueDate'] ?? null;
+        
+        if (!$linkedEstimateId && $invoiceContactId && $invoiceDate) {
+            // Pass EstimateService and locationId to enable contact ID verification
+            $estimateService = $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class);
+            $matchedEstimateId = $this->portalMeta->findEstimateIdByContactAndDate($invoiceContactId, $invoiceDate, $estimateService, $locationId);
+            if ($matchedEstimateId) {
+                $linkedEstimateId = $matchedEstimateId;
+                // Auto-link the invoice to the estimate for future lookups
+                $meta = $this->getPortalMeta($linkedEstimateId);
+                if (empty($meta['invoice']['id'])) {
+                    $this->updatePortalMeta($linkedEstimateId, [
+                        'invoice' => [
+                            'id' => $invoiceId,
+                            'number' => $invoice['invoiceNumber'] ?? null,
+                            'status' => $invoice['status'] ?? 'draft',
+                        ]
+                    ]);
                 }
             }
         }

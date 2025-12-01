@@ -300,7 +300,64 @@ class EstimateService
         
         // Ensure contact has an ID (required for invoice creation)
         if (empty($contactDetails['id'])) {
+            $this->logger->error('Cannot create invoice: estimate missing contact ID', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'contactDetails' => $contactDetails,
+            ]);
             return new WP_Error('missing_contact_id', __('Contact ID is required to create invoice. Estimate must have a linked contact.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Validate estimate has items
+        $estimateItems = (array)($record['items'] ?? []);
+        if (empty($estimateItems)) {
+            $this->logger->error('Cannot create invoice: estimate has no items', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+            return new WP_Error('empty_items', __('Cannot create invoice: estimate has no items.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Validate and map items
+        $invoiceItems = [];
+        foreach ($estimateItems as $item) {
+            // Validate item structure
+            $itemName = (string)($item['name'] ?? '');
+            $itemAmount = (float)($item['amount'] ?? 0);
+            
+            if (empty($itemName)) {
+                $this->logger->warning('Skipping invoice item with missing name', [
+                    'estimateId' => $estimateId,
+                    'item' => $item,
+                ]);
+                continue; // Skip invalid items
+            }
+            
+            if ($itemAmount <= 0) {
+                $this->logger->warning('Invoice item has zero or negative amount', [
+                    'estimateId' => $estimateId,
+                    'itemName' => $itemName,
+                    'amount' => $itemAmount,
+                ]);
+            }
+            
+            $invoiceItems[] = [
+                'name'        => $itemName,
+                'description' => (string)($item['description'] ?? ''),
+                'currency'    => (string)($item['currency'] ?? ($record['currency'] ?? 'AUD')),
+                'amount'      => $itemAmount,
+                'qty'         => (int)(isset($item['quantity']) ? $item['quantity'] : ($item['qty'] ?? 1)),
+            ];
+        }
+        
+        // Ensure we have at least one valid item after validation
+        if (empty($invoiceItems)) {
+            $this->logger->error('Cannot create invoice: no valid items after validation', [
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+                'originalItemsCount' => count($estimateItems),
+            ]);
+            return new WP_Error('no_valid_items', __('Cannot create invoice: no valid items found.', 'cheapalarms'), ['status' => 400]);
         }
 
         // Build invoice payload from estimate data
@@ -314,15 +371,7 @@ class EstimateService
             'contactDetails' => $contactDetails,
             'issueDate'      => gmdate('Y-m-d'),
             'dueDate'        => gmdate('Y-m-d', strtotime('+30 days')),
-            'items'          => array_map(function ($item) use ($record) {
-                return [
-                    'name'        => (string)($item['name'] ?? ''),
-                    'description' => (string)($item['description'] ?? ''),
-                    'currency'    => (string)($item['currency'] ?? ($record['currency'] ?? 'AUD')),
-                    'amount'      => (float)($item['amount'] ?? 0),
-                    'qty'         => (int)(isset($item['quantity']) ? $item['quantity'] : ($item['qty'] ?? 1)),
-                ];
-            }, (array)($record['items'] ?? [])),
+            'items'          => $invoiceItems,
             'termsNotes'     => (string)($record['termsNotes'] ?? ''),
         ];
 

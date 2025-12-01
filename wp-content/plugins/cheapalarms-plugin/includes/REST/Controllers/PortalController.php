@@ -164,9 +164,16 @@ class PortalController implements ControllerInterface
                 $payload    = $request->get_json_params();
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
                 $locationId = sanitize_text_field($payload['locationId'] ?? '');
-                if (!$estimateId) {
-                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                
+                // Input validation
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
+                
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
                 $result = $this->service->acceptEstimate($estimateId, $locationId);
                 return $this->respond($result);
             },
@@ -182,8 +189,13 @@ class PortalController implements ControllerInterface
                 $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
                 $force       = !empty($payload['force']);
 
-                if (!$estimateId) {
-                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                // Input validation
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
                 }
 
                 // Force refresh of current user so JWT filters can run
@@ -213,9 +225,16 @@ class PortalController implements ControllerInterface
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
                 $locationId = sanitize_text_field($payload['locationId'] ?? '');
                 $reason     = sanitize_text_field($payload['reason'] ?? '');
-                if (!$estimateId) {
-                    return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
+                
+                // Input validation
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
+                
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
                 $result = $this->service->rejectEstimate($estimateId, $locationId, $reason);
                 return $this->respond($result);
             },
@@ -347,10 +366,15 @@ class PortalController implements ControllerInterface
     {
         if (is_wp_error($result)) {
             $status = $result->get_error_data()['status'] ?? 500;
+            $errorData = $result->get_error_data();
             return new WP_REST_Response([
                 'ok'  => false,
-                'err' => $result->get_error_message(),
+                'error' => $result->get_error_message(), // Standardized to 'error'
                 'code'=> $result->get_error_code(),
+                // Include 'err' for backward compatibility
+                'err' => $result->get_error_message(),
+                // Include error details if available
+                'details' => $errorData['details'] ?? null,
             ], $status);
         }
 

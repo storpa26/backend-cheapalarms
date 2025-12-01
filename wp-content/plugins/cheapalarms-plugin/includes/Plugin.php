@@ -145,8 +145,9 @@ class Plugin
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\PortalService::class, fn () => new \CheapAlarms\Plugin\Services\PortalService(
             $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
-            $this->container->get(Logger::class),
-            $this->container
+            $this->container->get(\CheapAlarms\Plugin\Services\Logger::class),
+            $this->container,
+            $this->container->get(\CheapAlarms\Plugin\Config\Config::class)
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\ServiceM8Client::class, fn () => new \CheapAlarms\Plugin\Services\ServiceM8Client(
             $this->container->get(Config::class),

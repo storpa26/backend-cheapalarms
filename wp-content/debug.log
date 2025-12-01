@@ -2242,3 +2242,351 @@
 [01-Dec-2025 07:58:11 UTC] [CheapAlarms Plugin] rest_api_init register controllers
 [01-Dec-2025 07:58:11 UTC] [CheapAlarms Plugin] registering EstimateController routes
 [01-Dec-2025 07:58:12 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773\/send","code":422,"body":"{\"status\":422,\"options\":{},\"message\":[\"property method should not exist\",\"action should not be empty\",\"action must be a valid enum value\",\"liveMode should not be empty\",\"liveMode must be a boolean value\"],\"name\":\"UnprocessableEntityException\",\"error\":\"Unprocessable Entity\",\"statusCode\":422,\"traceId\":\"028b97c1-12cc-447f-bead-032b003d77f9\"}","request":{"altId":"aLTXtdwNknfmEFo3WBIX","altType":"location","method":"email"}}
+[01-Dec-2025 08:41:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:33 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:33 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:33 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:33 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:41:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:38 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:38 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:40 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:40 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:40 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:41 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:41 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:41 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:52 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:52 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:41:54 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:42:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:42:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:42:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:42:04 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=20&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 08:42:10 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:42:10 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:42:10 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:42:11 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=20&offset=0&status=sent","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 08:42:46 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:42:46 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:42:46 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:42:47 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:43:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:43:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:43:01 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:05 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:43:05 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:43:22 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:43:22 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:43:22 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:23 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:43:23 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:43:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:43:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:43:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:43:28 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:43:28 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:43:28 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:43:29 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:43:30 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:43:30 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:50:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:51 UTC] [CheapAlarms][INFO] Estimate accepted with valid contact {"estimateId":"6926751d9264773cb2c3909d","contactId":"XwHlYjnnIhPQ0cPo95ke"}
+[01-Dec-2025 08:50:51 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:51 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:50:51 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:52 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/XwHlYjnnIhPQ0cPo95ke","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 08:50:52 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/XwHlYjnnIhPQ0cPo95ke","code":400,"body":"{\"message\":\"Contact not found for id:XwHlYjnnIhPQ0cPo95ke\",\"error\":\"Bad Request\",\"statusCode\":400}","request":[]}
+[01-Dec-2025 08:50:52 UTC] [CheapAlarms][WARNING] Could not fetch contact for tag update, trying direct tag add {"contactId":"XwHlYjnnIhPQ0cPo95ke","error":"GHL responded with status 400"}
+[01-Dec-2025 08:50:53 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/XwHlYjnnIhPQ0cPo95ke\/tags","code":400,"body":"{\"message\":\"Contact not found for id:XwHlYjnnIhPQ0cPo95ke\",\"error\":\"Bad Request\",\"statusCode\":400}","request":{"tags":["portal_accepted"]}}
+[01-Dec-2025 08:50:53 UTC] [CheapAlarms][INFO] Direct tag endpoint not available, tag update skipped {"contactId":"XwHlYjnnIhPQ0cPo95ke","error":"GHL responded with status 400"}
+[01-Dec-2025 08:50:53 UTC] [CheapAlarms][WARNING] Failed to add GHL acceptance tag {"contactId":"XwHlYjnnIhPQ0cPo95ke","estimateId":"6926751d9264773cb2c3909d","locationId":"aLTXtdwNknfmEFo3WBIX","error":"GHL responded with status 400"}
+[01-Dec-2025 08:50:53 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/contacts\/XwHlYjnnIhPQ0cPo95ke\/notes","code":400,"body":"{\"message\":\"Contact not found for id:XwHlYjnnIhPQ0cPo95ke\",\"error\":\"Bad Request\",\"statusCode\":400}","request":{"body":"Customer accepted Estimate #38 via Portal on 2025-12-01 08:50:52. Portal Status: Accepted (GHL estimate may still show draft status).","contactId":"XwHlYjnnIhPQ0cPo95ke"}}
+[01-Dec-2025 08:50:53 UTC] [CheapAlarms][INFO] Contact notes endpoint failed, trying general notes endpoint {"contactId":"XwHlYjnnIhPQ0cPo95ke","error":"GHL responded with status 400"}
+[01-Dec-2025 08:50:54 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/notes\/","code":401,"body":"{\"statusCode\":401,\"message\":\"The token is not authorized for this scope.\"}","request":{"body":"Customer accepted Estimate #38 via Portal on 2025-12-01 08:50:52. Portal Status: Accepted (GHL estimate may still show draft status).","contactId":"XwHlYjnnIhPQ0cPo95ke"}}
+[01-Dec-2025 08:50:54 UTC] [CheapAlarms][WARNING] Failed to add GHL acceptance note {"contactId":"XwHlYjnnIhPQ0cPo95ke","locationId":"aLTXtdwNknfmEFo3WBIX","error":"GHL responded with status 401","errorData":{"code":401,"body":"{\"statusCode\":401,\"message\":\"The token is not authorized for this scope.\"}"}}
+[01-Dec-2025 08:50:54 UTC] [CheapAlarms][WARNING] Failed to add GHL acceptance note {"contactId":"XwHlYjnnIhPQ0cPo95ke","estimateId":"6926751d9264773cb2c3909d","locationId":"aLTXtdwNknfmEFo3WBIX","error":"GHL responded with status 401"}
+[01-Dec-2025 08:50:54 UTC] [CheapAlarms][INFO] Estimate accepted successfully {"estimateId":"6926751d9264773cb2c3909d","locationId":"aLTXtdwNknfmEFo3WBIX","acceptedAt":"2025-12-01 08:50:50"}
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:50:55 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:50:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:50:58 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:50:58 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:00 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:00 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:00 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:00 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:01 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:02 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:51:02 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:02 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:02 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:02 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:51:04 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:51:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:24 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:24 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:24 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:24 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:28 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:28 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:28 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:30 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:30 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:30 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:33 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:33 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:33 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:33 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=40&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:51:35 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:36 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:36 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:36 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=20&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 08:51:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:51:51 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:51:51 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:51:51 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=40&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:57:08 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:57:08 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:57:08 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:57:09 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:58:13 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:58:13 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:58:13 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:58:13 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=40&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:59:03 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:59:06 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:59:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:59:06 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:59:06 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:59:07 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:59:07 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:59:07 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:59:07 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:59:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:59:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:59:27 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:59:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 08:59:27 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 08:59:28 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 08:59:28 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 08:59:28 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 08:59:28 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:00:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:00:49 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:00:49 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:00:49 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=20&offset=0","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 09:00:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:07 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:07 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:07 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:07 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/692bea1b67ab4ba34c34fbc5?altId=aLTXtdwNknfmEFo3WBIX&altType=location","headers":["Authorization","Accept","Content-Type","Version","LocationId"],"hasLocationIdHeader":true}
+[01-Dec-2025 09:02:09 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:09 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:09 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:14 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:14 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:14 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=40&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:21 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:21 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:21 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:23 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 09:02:23 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:23 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:23 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:23 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:32 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:32 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:32 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267531926477c5fac39192?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 09:02:34 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:42 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:42 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:42 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:43 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:43 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:43 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:43 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:44 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/692bdbf321f9ec14aa4e9fe2?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 09:02:44 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:50 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:50 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:50 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:02:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:53 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6926751d9264773cb2c3909d?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 09:02:53 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 09:02:53 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:02:53 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 09:02:53 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 09:04:00 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 09:07:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:04:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:34:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:34:59 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:00 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:00 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:03 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:03 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:03 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:03 UTC] Automatic updates starting...
+[01-Dec-2025 17:35:05 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:05 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:05 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:06 UTC] Automatic updates complete.
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:17 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:18 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6912d604294c450cd3e23765","changes":["locationId"]}
+[01-Dec-2025 17:35:18 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:18 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:18 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:19 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"69267502926477dbc8c38f71","changes":["locationId"]}
+[01-Dec-2025 17:35:19 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:19 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:19 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:20 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6927efc921f9ecda2a1e0773","changes":["locationId"]}
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:31 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:32 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6927efc921f9ecda2a1e0773","changes":["locationId"]}
+[01-Dec-2025 17:35:34 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:34 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:34 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:37 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:37 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:37 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:37 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:38 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:38 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:38 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:38 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:39 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:40 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:40 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:40 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6912d604294c450cd3e23765","changes":["locationId"]}
+[01-Dec-2025 17:35:40 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:41 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:41 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:41 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6927efc921f9ecda2a1e0773","changes":["locationId"]}
+[01-Dec-2025 17:35:42 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"69267502926477dbc8c38f71","changes":["locationId"]}
+[01-Dec-2025 17:35:42 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:42 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:42 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:43 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6927efc921f9ecda2a1e0773","changes":["locationId"]}
+[01-Dec-2025 17:35:47 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:47 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:47 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:47 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:48 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6912d604294c450cd3e23765?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:48 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:49 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6912d604294c450cd3e23765","changes":["locationId"]}
+[01-Dec-2025 17:35:49 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:49 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:49 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:50 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"69267502926477dbc8c38f71","changes":["locationId"]}
+[01-Dec-2025 17:35:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:50 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6927efc921f9ecda2a1e0773?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:50 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:51 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"6927efc921f9ecda2a1e0773","changes":["locationId"]}
+[01-Dec-2025 17:35:55 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:55 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:55 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:35:55 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:56 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:35:56 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:35:56 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"69267502926477dbc8c38f71","changes":["locationId"]}
+[01-Dec-2025 17:35:58 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:35:58 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:35:59 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] rest_api_init register controllers
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms Plugin] registering EstimateController routes
+[01-Dec-2025 17:36:01 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:36:02 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:36:02 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:36:02 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/69267502926477dbc8c38f71?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
+[01-Dec-2025 17:36:02 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[01-Dec-2025 17:36:03 UTC] [CheapAlarms][WARNING] Failed to update portal meta {"estimateId":"69267502926477dbc8c38f71","changes":["locationId"]}
