@@ -167,11 +167,15 @@ class PortalService
             $quoteStatus['acceptedAt'] = current_time('mysql');
         }
 
+        // Track if we made any meta updates to avoid unnecessary getMeta() calls
+        $metaUpdated = false;
+        
         // Only update meta if status changed or if we need to sync acceptedAt
         if ($portalMetaStatus !== $quoteStatus['status'] || 
             ($isAccepted && empty($meta['quote']['acceptedAt']))) {
             $this->updateMeta($estimateId, ['quote' => $quoteStatus]);
-            $meta = $this->getMeta($estimateId);
+            $meta['quote'] = $quoteStatus; // Update local copy instead of fetching
+            $metaUpdated = true;
         }
 
         $defaultAccount = [
@@ -191,8 +195,10 @@ class PortalService
         if ($isAccepted && ($accountMeta['status'] ?? '') !== 'active') {
             $provisioned = $this->provisionAccount($estimateId, $estimate['contact'] ?? [], $locationId);
             if (!is_wp_error($provisioned)) {
-                $meta        = $this->getMeta($estimateId);
+                // Only fetch meta if provisionAccount actually updated something
+                $meta = $this->getMeta($estimateId);
                 $accountMeta = array_merge($defaultAccount, $meta['account'] ?? []);
+                $metaUpdated = true;
             } else {
                 $this->logger->error('Failed to auto-provision portal account', [
                     'estimateId' => $estimateId,
@@ -203,8 +209,11 @@ class PortalService
             $this->attachEstimateToUser((int) $accountMeta['userId'], $estimateId, $locationId);
         }
 
-        // Refresh meta one final time to ensure we have latest invoice data
-        $meta = $this->getMeta($estimateId);
+        // Only refresh meta if we made updates or need latest invoice data
+        // Most of the time, we can use the cached $meta we already have
+        if ($metaUpdated) {
+            $meta = $this->getMeta($estimateId);
+        }
 
         return [
             'estimateId'   => $estimateId,
