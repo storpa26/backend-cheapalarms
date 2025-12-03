@@ -45,6 +45,69 @@ class PortalMetaRepository
     }
 
     /**
+     * Batch get portal meta for multiple estimates.
+     * This prevents N+1 queries by fetching all metadata in one query.
+     *
+     * @param string[] $estimateIds
+     * @return array<string, array> Map of estimateId => meta
+     */
+    public function batchGet(array $estimateIds): array
+    {
+        if (empty($estimateIds)) {
+            return [];
+        }
+
+        global $wpdb;
+        $prefix = 'ca_portal_meta_';
+        
+        // Build option names
+        $optionNames = array_map(fn($id) => $prefix . $id, $estimateIds);
+        
+        // Create placeholders for prepared statement
+        $placeholders = implode(',', array_fill(0, count($optionNames), '%s'));
+        
+        // Fetch all in one query
+        $query = $wpdb->prepare(
+            "SELECT option_name, option_value 
+             FROM {$wpdb->options} 
+             WHERE option_name IN ($placeholders)",
+            $optionNames
+        );
+        
+        $results = $wpdb->get_results($query, ARRAY_A);
+        
+        // Build result map
+        $meta = [];
+        foreach ($results as $row) {
+            $estimateId = str_replace($prefix, '', $row['option_name']);
+            $decoded = json_decode($row['option_value'], true);
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                // Log error but continue
+                if (function_exists('error_log')) {
+                    error_log(sprintf(
+                        '[CheapAlarms] Failed to decode portal meta for estimate %s in batchGet: %s',
+                        $estimateId,
+                        json_last_error_msg()
+                    ));
+                }
+                $meta[$estimateId] = [];
+            } else {
+                $meta[$estimateId] = is_array($decoded) ? $decoded : [];
+            }
+        }
+        
+        // Fill in missing estimates with empty arrays
+        foreach ($estimateIds as $id) {
+            if (!isset($meta[$id])) {
+                $meta[$id] = [];
+            }
+        }
+        
+        return $meta;
+    }
+
+    /**
      * Merge new data into existing portal meta.
      *
      * @param array<string, mixed> $newData
