@@ -923,6 +923,52 @@ class PortalService
     }
 
     /**
+     * Submit photos for review
+     * Marks photo submission status as "submitted" with timestamp
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @return array|WP_Error
+     */
+    public function submitPhotos(string $estimateId, string $locationId = '')
+    {
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        $meta = $this->getMeta($estimateId);
+        
+        // Get actual uploaded photos from storage
+        $stored = get_option('ca_estimate_uploads_' . $estimateId, '');
+        $uploadData = $stored ? json_decode($stored, true) : null;
+        $uploads = is_array($uploadData['uploads'] ?? null) ? $uploadData['uploads'] : [];
+        
+        // Build photos structure with actual data
+        $photos = $meta['photos'] ?? [];
+        $photos['total'] = count($uploads);
+        $photos['uploaded'] = count($uploads);
+        $photos['items'] = $uploads;
+        $photos['submission_status'] = 'submitted';
+        $photos['submitted_at'] = current_time('mysql');
+        $photos['last_edited_at'] = current_time('mysql');
+        
+        // Update meta
+        $meta['photos'] = $photos;
+        update_option(self::OPTION_PREFIX . $estimateId, wp_json_encode($meta), false);
+        
+        // Send notification to admin
+        $this->sendPhotoSubmissionNotificationToAdmin($estimateId, $locationId, $photos['total']);
+        
+        return [
+            'ok' => true,
+            'submission_status' => 'submitted',
+            'submitted_at' => $photos['submitted_at'],
+            'photo_count' => $photos['total'],
+        ];
+    }
+
+    /**
      * @return array|WP_Error
      */
     public function provisionAccount(string $estimateId, array $contact, ?string $locationId = null)
@@ -1612,6 +1658,89 @@ class PortalService
             }
             $locations[$estimateId] = $locationId;
             update_user_meta($userId, 'ca_estimate_locations', $locations);
+        }
+    }
+
+    /**
+     * Send notification to admin when customer submits photos
+     * @param string $estimateId
+     * @param string $locationId
+     * @param int $photoCount
+     * @return void
+     */
+    private function sendPhotoSubmissionNotificationToAdmin(string $estimateId, string $locationId, int $photoCount): void
+    {
+        try {
+            // Get estimate to fetch customer details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for admin photo notification', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            // Get admin email
+            $adminEmail = get_option('admin_email');
+            if (empty($adminEmail)) {
+                $this->logger->warning('No admin email configured for photo submission notification', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            
+            // Admin dashboard URL
+            $adminUrl = home_url('/admin/estimates?id=' . $estimateId);
+
+            $subject = sprintf('[CheapAlarms] Customer submitted %d photos for Estimate #%s', $photoCount, $estimateNumber);
+            $headers = ['Content-Type: text/html; charset=UTF-8'];
+
+            $body = '<h2>📸 Customer Photos Submitted</h2>';
+            $body .= '<p><strong>Customer:</strong> ' . esc_html($customerName) . '</p>';
+            $body .= '<p><strong>Estimate:</strong> #' . esc_html($estimateNumber) . '</p>';
+            $body .= '<p><strong>Photos uploaded:</strong> ' . $photoCount . '</p>';
+            $body .= '<p><strong>Submitted:</strong> ' . current_time('F j, Y g:i A') . '</p>';
+            $body .= '<hr>';
+            $body .= '<p>The customer has finished uploading installation photos. Please review them and proceed with the next steps:</p>';
+            $body .= '<ol>';
+            $body .= '<li>Review all uploaded photos in the admin panel</li>';
+            $body .= '<li>Verify pricing is accurate (adjust estimate if needed)</li>';
+            $body .= '<li>Create the invoice for the customer</li>';
+            $body .= '</ol>';
+            $body .= '<p><a href="' . esc_url($adminUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #1EA6DF; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">View Estimate in Admin Panel</a></p>';
+            $body .= '<hr>';
+            $body .= '<p style="color: #666; font-size: 12px;">This is an automated notification from CheapAlarms Customer Portal.</p>';
+
+            $sent = wp_mail($adminEmail, $subject, $body, $headers);
+
+            if ($sent) {
+                $this->logger->info('Admin photo submission notification sent', [
+                    'estimateId' => $estimateId,
+                    'photoCount' => $photoCount,
+                    'adminEmail' => $adminEmail,
+                ]);
+            } else {
+                $this->logger->warning('Failed to send admin photo submission notification', [
+                    'estimateId' => $estimateId,
+                    'adminEmail' => $adminEmail,
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            // Don't fail photo submission if email fails
+            $this->logger->error('Exception sending admin photo notification', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 }

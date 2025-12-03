@@ -327,6 +327,28 @@ class PortalController implements ControllerInterface
             },
         ]);
 
+        register_rest_route('ca/v1', '/portal/submit-photos', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $payload     = $request->get_json_params();
+                $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId  = sanitize_text_field($payload['locationId'] ?? '');
+                
+                // Input validation
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                $result = $this->service->submitPhotos($estimateId, $locationId);
+                return $this->respond($result);
+            },
+        ]);
+
         register_rest_route('ca/v1', '/portal/test-account', [
             'methods'             => 'GET',
             'permission_callback' => function (WP_REST_Request $request) {
