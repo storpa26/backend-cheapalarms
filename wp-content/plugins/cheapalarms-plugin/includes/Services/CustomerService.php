@@ -155,13 +155,35 @@ class CustomerService
 
         $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
-        $sent = wp_mail($email, $subject, $body, $headers);
+        // Send via GHL
+        $sent = false;
+        if ($ghlContactId) {
+            $ghlClient = $this->container->get(GhlClient::class);
+            $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
+            $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
+            
+            $payload = [
+                'contactId' => $ghlContactId,
+                'type' => 'Email',
+                'status' => 'pending',
+                'subject' => $subject,
+                'html' => $body,
+                'emailFrom' => $fromEmail,
+            ];
+            
+            if ($config->getLocationId()) {
+                $payload['locationId'] = $config->getLocationId();
+            }
+            
+            $result = $ghlClient->post('/conversations/messages', $payload);
+            $sent = !is_wp_error($result);
+        }
 
-        $this->logger->info('Portal invite sent to GHL contact', [
+        $this->logger->info('Portal invite sent to GHL contact via GHL email', [
             'ghlContactId' => $ghlContactId,
             'userId' => $userId,
             'email' => $email,
-            'emailSent' => $sent,
+            'sentViaGhl' => $sent,
         ]);
 
         return [

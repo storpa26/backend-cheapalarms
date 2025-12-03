@@ -408,6 +408,11 @@ class PortalService
                 'acceptedAt' => $status['acceptedAt'],
             ]);
 
+            // Send acceptance confirmation email (non-blocking - doesn't fail if email fails)
+            if ($locationId) {
+                $this->sendAcceptanceConfirmationEmail($estimateId, $locationId);
+            }
+
             return [
                 'ok'        => true,
                 'quote'     => $status,
@@ -831,6 +836,11 @@ class PortalService
             $this->updateGhlNoteWithInvoice($estimateId, $resolvedLocation, $invoice);
         }
 
+        // Send invoice ready email (non-blocking - doesn't fail if email fails)
+        if (!empty($invoice['id']) && $resolvedLocation) {
+            $this->sendInvoiceReadyEmail($estimateId, $resolvedLocation, $invoice);
+        }
+
         return [
             'invoice' => $invoice,
         ];
@@ -966,13 +976,17 @@ class PortalService
         $this->updateMeta($estimateId, $update);
 
         $displayName = sanitize_text_field($firstName ?: ($contact['name'] ?? 'customer'));
+        $contactId = $contact['id'] ?? null;
 
         $resetUrl = $this->sendPortalInvite(
             $email,
             $displayName,
             $portalUrl,
             (int) $userId,
-            false
+            false,
+            $contactId,
+            $estimateId,
+            $locationId
         );
 
         if ($resetUrl) {
@@ -1047,13 +1061,17 @@ class PortalService
 
         $userId      = isset($currentMeta['userId']) ? (int) $currentMeta['userId'] : (int) email_exists($email);
         $contactName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'customer');
+        $contactId = $contact['id'] ?? null;
 
         $resetUrl = $this->sendPortalInvite(
             $email,
             $contactName,
             $portalLink,
             $userId,
-            true
+            true,
+            $contactId,
+            $estimateId,
+            null // locationId not needed for resend
         );
 
         $this->updateMeta($estimateId, [
@@ -1231,7 +1249,7 @@ class PortalService
         return is_string($accountToken) && hash_equals($accountToken, $token);
     }
 
-    private function sendPortalInvite(string $email, string $name, string $portalUrl, int $userId, bool $isResend): ?string
+    private function sendPortalInvite(string $email, string $name, string $portalUrl, int $userId, bool $isResend, ?string $contactId = null, ?string $estimateId = null, ?string $locationId = null): ?string
     {
         if (!$email || !$userId) {
             return null;
@@ -1264,7 +1282,7 @@ class PortalService
 
         $body  = '<p>' . esc_html($greeting) . '</p>';
         $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the secure links below to access your estimate and manage your installation.', 'cheapalarms')) . '</p>';
-        $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
 
         if ($resetUrl) {
             $body .= '<p><a href="' . esc_url($resetUrl) . '">' . esc_html(__('Set or reset your password', 'cheapalarms')) . '</a></p>';
@@ -1275,16 +1293,304 @@ class PortalService
         $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
         $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
-        wp_mail($email, $subject, $body, $headers);
+        // Send via GHL if contactId available, otherwise fallback to wp_mail
+        $sent = false;
+        if ($contactId) {
+            $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+        } else {
+            // Fallback: Try to get contactId from estimate
+            if ($estimateId && $locationId) {
+                $estimate = $this->estimateService->getEstimate([
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+                if (!is_wp_error($estimate)) {
+                    $contactId = $estimate['contact']['id'] ?? null;
+                    if ($contactId) {
+                        $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                    }
+                }
+            }
+            
+            // Final fallback: Use wp_mail if no contactId
+            if (!$sent && !$contactId) {
+                $sent = wp_mail($email, $subject, $body, $headers);
+                $this->logger->info('Portal invite sent via wp_mail (no GHL contactId)', [
+                    'email' => $email,
+                ]);
+            }
+        }
 
         $this->logger->info('Portal invite email sent', [
-            'email'    => $email,
-            'userId'   => $userId,
-            'resend'   => $isResend,
-            'resetUrl' => $resetUrl,
+            'email'     => $email,
+            'userId'    => $userId,
+            'resend'    => $isResend,
+            'contactId' => $contactId,
+            'sentViaGhl' => $contactId ? true : false,
+            'sent'      => $sent,
         ]);
 
         return $resetUrl;
+    }
+
+    /**
+     * Send email via GHL Conversations API
+     * @param string $contactId GHL contact ID
+     * @param string $subject Email subject
+     * @param string $htmlBody Email HTML body
+     * @return bool Success status
+     */
+    private function sendEmailViaGhl(string $contactId, string $subject, string $htmlBody): bool
+    {
+        try {
+            if (empty($contactId)) {
+                $this->logger->warning('Cannot send GHL email without contactId');
+                return false;
+            }
+
+            $ghlClient = $this->container->get(GhlClient::class);
+            $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
+            
+            $payload = [
+                'contactId' => $contactId,
+                'type' => 'Email',
+                'status' => 'pending',
+                'subject' => $subject,
+                'html' => $htmlBody,
+                'emailFrom' => $fromEmail,
+            ];
+            
+            if ($this->config->getLocationId()) {
+                $payload['locationId'] = $this->config->getLocationId();
+            }
+            
+            $result = $ghlClient->post('/conversations/messages', $payload);
+            
+            if (is_wp_error($result)) {
+                $this->logger->error('GHL email API failed', [
+                    'contactId' => $contactId,
+                    'subject' => $subject,
+                    'error' => $result->get_error_message(),
+                ]);
+                return false;
+            }
+            
+            $this->logger->info('Email sent via GHL', [
+                'contactId' => $contactId,
+                'subject' => $subject,
+            ]);
+            
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error('Exception sending GHL email', [
+                'contactId' => $contactId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Send invoice ready email to customer
+     * @param string $estimateId
+     * @param string $locationId
+     * @param array $invoice
+     * @return void
+     */
+    private function sendInvoiceReadyEmail(string $estimateId, string $locationId, array $invoice): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for invoice email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for invoice notification', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $invoiceNumber = sanitize_text_field($invoice['invoiceNumber'] ?? $invoice['id']);
+            $invoiceUrl = $invoice['url'] ?? '';
+            $invoiceTotal = $invoice['total'] ?? 0;
+            $currency = $invoice['currency'] ?? 'AUD';
+            $dueDate = $invoice['dueDate'] ?? '';
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+
+            if (empty($invoiceUrl)) {
+                $this->logger->warning('Invoice URL missing for email notification', [
+                    'estimateId' => $estimateId,
+                    'invoiceId' => $invoice['id'] ?? null,
+                ]);
+                return;
+            }
+
+            $subject = __('Your invoice is ready for payment', 'cheapalarms');
+            $headers = ['Content-Type: text/html; charset=UTF-8'];
+
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            $body .= '<p>' . esc_html(__('Great news! Your invoice is now ready for payment.', 'cheapalarms')) . '</p>';
+            
+            $body .= '<p><strong>' . esc_html(sprintf(__('Invoice #%s', 'cheapalarms'), $invoiceNumber)) . '</strong><br />';
+            $body .= esc_html(sprintf(__('Amount: %s $%s', 'cheapalarms'), $currency, number_format($invoiceTotal, 2))) . '</p>';
+            
+            if ($dueDate) {
+                $formattedDate = date_i18n(get_option('date_format'), strtotime($dueDate));
+                $body .= '<p>' . esc_html(sprintf(__('Due Date: %s', 'cheapalarms'), $formattedDate)) . '</p>';
+            }
+
+            $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+
+            $body .= '<p>' . esc_html(__('Payment Options:', 'cheapalarms')) . '</p>';
+            $body .= '<ul>';
+            $body .= '<li>' . esc_html(__('Click the button above to pay online securely', 'cheapalarms')) . '</li>';
+            $body .= '<li>' . esc_html(__('Multiple payment methods accepted', 'cheapalarms')) . '</li>';
+            $body .= '</ul>';
+
+            $body .= '<p>' . esc_html(__('You can also view this invoice and track your project progress in your portal:', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+
+            $body .= '<p>' . esc_html(__('If you have any questions about your invoice, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL instead of wp_mail
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for invoice email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Invoice ready email sent via GHL', [
+                'estimateId' => $estimateId,
+                'invoiceId' => $invoice['id'] ?? null,
+                'contactId' => $contactId,
+                'sent' => $sent,
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail invoice creation if email fails
+            $this->logger->error('Failed to send invoice ready email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Send acceptance confirmation email to customer
+     * @param string $estimateId
+     * @param string $locationId
+     * @return void
+     */
+    private function sendAcceptanceConfirmationEmail(string $estimateId, string $locationId): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for acceptance email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for acceptance confirmation', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+            
+            // Get invoice URL if available
+            $meta = $this->getMeta($estimateId);
+            $invoice = $meta['invoice'] ?? null;
+            $invoiceUrl = $invoice['url'] ?? null;
+
+            $subject = __('Thank you for accepting your estimate', 'cheapalarms');
+            $headers = ['Content-Type: text/html; charset=UTF-8'];
+
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            $body .= '<p>' . esc_html(sprintf(
+                __('Thank you for accepting estimate #%s! We\'re excited to move forward with your project.', 'cheapalarms'),
+                $estimateNumber
+            )) . '</p>';
+
+            if ($invoiceUrl) {
+                $body .= '<p>' . esc_html(__('Your invoice has been created and is ready for payment:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+            } else {
+                $body .= '<p>' . esc_html(__('We\'re preparing your invoice and will send it to you shortly.', 'cheapalarms')) . '</p>';
+            }
+
+            $body .= '<p>' . esc_html(__('You can view your estimate and track progress in your portal:', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+            
+            $body .= '<p>' . esc_html(__('Next Steps:', 'cheapalarms')) . '</p>';
+            $body .= '<ul>';
+            $body .= '<li>' . esc_html(__('Complete payment using the invoice link above', 'cheapalarms')) . '</li>';
+            $body .= '<li>' . esc_html(__('Upload any required photos through your portal', 'cheapalarms')) . '</li>';
+            $body .= '<li>' . esc_html(__('Our team will contact you to schedule installation', 'cheapalarms')) . '</li>';
+            $body .= '</ul>';
+
+            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL instead of wp_mail
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for acceptance email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Acceptance confirmation email sent via GHL', [
+                'estimateId' => $estimateId,
+                'contactId' => $contactId,
+                'sent' => $sent,
+                'hasInvoice' => !empty($invoiceUrl),
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail acceptance if email fails
+            $this->logger->error('Failed to send acceptance confirmation email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function attachEstimateToUser(int $userId, string $estimateId, ?string $locationId = null): void

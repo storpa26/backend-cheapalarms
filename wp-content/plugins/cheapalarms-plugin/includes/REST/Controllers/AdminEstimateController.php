@@ -148,6 +148,12 @@ class AdminEstimateController extends AdminController
         $items = $result['items'] ?? [];
         $out   = [];
 
+        // Extract all estimate IDs for batch fetching
+        $estimateIds = array_filter(array_map(fn($item) => $item['id'] ?? null, $items));
+        
+        // Batch fetch all portal meta in ONE query (prevents N+1 problem)
+        $allMeta = $this->portalMeta->batchGet($estimateIds);
+
         // Merge portal meta and apply filters
         // NOTE: We DON'T fetch full estimates here to keep it fast
         // Full data is available on the detail page
@@ -157,8 +163,8 @@ class AdminEstimateController extends AdminController
                 continue;
             }
 
-            // Get portal meta (fast, cached)
-            $meta = $this->getPortalMeta($estimateId);
+            // Get portal meta from batch result (already fetched)
+            $meta = $allMeta[$estimateId] ?? [];
             $portalStatusValue = $meta['quote']['status'] ?? 'sent';
 
             // Apply filters
