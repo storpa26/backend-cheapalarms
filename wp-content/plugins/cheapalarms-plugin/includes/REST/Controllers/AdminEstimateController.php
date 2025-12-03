@@ -402,10 +402,22 @@ class AdminEstimateController extends AdminController
             return $this->respond(new WP_Error('missing_location', __('Location ID is required.', 'cheapalarms'), ['status' => 400]));
         }
 
-        // Get optional send method from request body
+        // Get optional send method and revision data from request body
         $body = $request->get_json_params();
         $options = $body ?? [];
+        $revisionData = $options['revisionData'] ?? null;
 
+        // If revision data provided, send custom revision email instead of standard estimate
+        if ($revisionData && is_array($revisionData)) {
+            $this->portalService->sendRevisionNotification($estimateId, $locationId, $revisionData);
+            
+            return $this->respond([
+                'ok' => true,
+                'message' => 'Revision notification sent successfully',
+            ]);
+        }
+
+        // Standard estimate send (via GHL)
         $result = $this->estimateService->sendEstimate($estimateId, $locationId, $options);
         if (is_wp_error($result)) {
             return $this->respond($result);

@@ -231,7 +231,11 @@ class EstimateService
 
         $altId   = $payload['altId'] ?? $this->config->getLocationId();
         $altType = $payload['altType'] ?? 'location';
+        
+        // Extract revision data before removing estimateId
+        $revisionData = $payload['revisionData'] ?? null;
         unset($payload['estimateId']);
+        unset($payload['revisionData']); // Remove from GHL payload
 
         $existingTerms = (string)($payload['termsNotes'] ?? '');
         $payload['termsNotes'] = $this->ensurePhotoLinkInTerms($existingTerms, $estimateId);
@@ -246,6 +250,12 @@ class EstimateService
 
         if (is_wp_error($response)) {
             return $response;
+        }
+
+        // Store revision data in portal meta if provided
+        if ($revisionData && is_array($revisionData)) {
+            $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
+            $portalService->storeRevisionData($estimateId, $revisionData);
         }
 
         return ['ok' => true, 'result' => $response];

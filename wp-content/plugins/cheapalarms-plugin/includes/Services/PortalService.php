@@ -1743,5 +1743,168 @@ class PortalService
             ]);
         }
     }
+
+    /**
+     * Store estimate revision data in portal meta
+     * Used when admin edits estimate based on customer photos
+     * 
+     * @param string $estimateId
+     * @param array $revisionData
+     * @return bool
+     */
+    public function storeRevisionData(string $estimateId, array $revisionData): bool
+    {
+        try {
+            $this->logger->info('Storing estimate revision data', [
+                'estimateId' => $estimateId,
+                'netChange' => $revisionData['netChange'] ?? 0,
+                'hasNote' => !empty($revisionData['adminNote']),
+            ]);
+
+            return $this->updateMeta($estimateId, ['revision' => $revisionData]);
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to store revision data', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Send estimate revision notification to customer
+     * Highlights savings or changes based on photo review
+     * 
+     * @param string $estimateId
+     * @param string $locationId
+     * @param array $revisionData
+     * @return void
+     */
+    public function sendRevisionNotification(string $estimateId, string $locationId, array $revisionData): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for revision email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for revision notification', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+            
+            $oldTotal = floatval($revisionData['oldTotal'] ?? 0);
+            $newTotal = floatval($revisionData['newTotal'] ?? 0);
+            $netChange = floatval($revisionData['netChange'] ?? 0);
+            $currency = $estimate['currency'] ?? 'AUD';
+            $adminNote = sanitize_text_field($revisionData['adminNote'] ?? '');
+            
+            $isSavings = $netChange < 0;
+            $isIncrease = $netChange > 0;
+
+            // Different subject lines for savings vs increases
+            $subject = $isSavings 
+                ? sprintf(__('🎉 Great news! Your CheapAlarms estimate has been updated - Save %s %s', 'cheapalarms'), $currency, number_format(abs($netChange), 2))
+                : __('Your CheapAlarms estimate has been updated', 'cheapalarms');
+
+            $body = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">';
+            
+            $body .= '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+
+            if ($isSavings) {
+                $body .= '<p><strong style="color: #10b981; font-size: 18px;">Good news!</strong> We\'ve reviewed the installation photos you submitted and found opportunities to optimize your installation.</p>';
+            } else {
+                $body .= '<p>We\'ve carefully reviewed the installation photos you submitted and updated your estimate to ensure accurate pricing for your specific site.</p>';
+            }
+
+            // Pricing box
+            $boxColor = $isSavings ? '#10b981' : '#1EA6DF';
+            $body .= '<div style="background: linear-gradient(135deg, ' . $boxColor . ', ' . ($isSavings ? '#059669' : '#0e7490') . '); color: white; padding: 24px; border-radius: 16px; margin: 24px 0; text-align: center;">';
+            $body .= '<div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">YOUR UPDATED PRICING</div>';
+            $body .= '<div style="font-size: 24px; text-decoration: line-through; opacity: 0.7; margin-bottom: 8px;">' . esc_html($currency . ' ' . number_format($oldTotal, 2)) . '</div>';
+            $body .= '<div style="font-size: 36px; font-weight: bold; margin-bottom: 16px;">' . esc_html($currency . ' ' . number_format($newTotal, 2)) . '</div>';
+            
+            if ($netChange !== 0) {
+                if ($isSavings) {
+                    $body .= '<div style="font-size: 28px; font-weight: bold; background: rgba(255,255,255,0.2); padding: 12px 24px; border-radius: 12px; display: inline-block;">🎊 YOU SAVE ' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                } else {
+                    $body .= '<div style="font-size: 18px; background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 8px; display: inline-block;">Additional: +' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                }
+            }
+            $body .= '</div>';
+
+            // Admin note
+            if ($adminNote) {
+                $body .= '<div style="background: #f8f9fa; border-left: 4px solid ' . $boxColor . '; padding: 16px; border-radius: 8px; margin: 24px 0;">';
+                $body .= '<div style="font-size: 12px; text-transform: uppercase; color: #6b7280; margin-bottom: 8px;">FROM YOUR INSTALLER</div>';
+                $body .= '<div style="color: #1f2937;">' . nl2br(esc_html($adminNote)) . '</div>';
+                $body .= '</div>';
+            }
+
+            // Call to action
+            $body .= '<p><strong>What\'s next:</strong></p>';
+            $body .= '<ol>';
+            $body .= '<li>Review the updated estimate in your portal</li>';
+            if ($isSavings) {
+                $body .= '<li><strong>Accept now to lock in your savings!</strong></li>';
+            } else {
+                $body .= '<li>If you\'re happy with the pricing, accept the estimate</li>';
+            }
+            $body .= '<li>We\'ll then create your invoice and schedule installation</li>';
+            $body .= '</ol>';
+
+            $body .= '<p style="text-align: center; margin: 32px 0;"><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, #1EA6DF, #c95375); color: white; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 16px;">View Updated Estimate</a></p>';
+
+            $body .= '<p style="color: #6b7280; font-size: 14px;">Have questions about the changes? Just reply to this email!</p>';
+            $body .= '<p>Thanks,<br/>CheapAlarms Team</p>';
+            $body .= '</div>';
+
+            // Send via GHL
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for revision email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            if ($sent) {
+                $this->logger->info('Estimate revision notification sent', [
+                    'estimateId' => $estimateId,
+                    'contactId' => $contactId,
+                    'isSavings' => $isSavings,
+                    'netChange' => $netChange,
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            // Don't fail estimate update if email fails
+            $this->logger->error('Failed to send revision notification', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
 }
 
