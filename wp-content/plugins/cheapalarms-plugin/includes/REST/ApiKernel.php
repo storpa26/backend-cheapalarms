@@ -13,6 +13,7 @@ use CheapAlarms\Plugin\REST\Controllers\GhlController;
 use CheapAlarms\Plugin\REST\Controllers\UsersController;
 use CheapAlarms\Plugin\REST\Controllers\AdminEstimateController;
 use CheapAlarms\Plugin\REST\Controllers\AdminInvoiceController;
+use CheapAlarms\Plugin\REST\Controllers\QuoteRequestController;
 use CheapAlarms\Plugin\Services\Container;
 
 class ApiKernel
@@ -35,6 +36,7 @@ class ApiKernel
             new UsersController($this->container),
             new AdminEstimateController($this->container),
             new AdminInvoiceController($this->container),
+            new QuoteRequestController($this->container),
         ];
 
         foreach ($controllers as $controller) {
