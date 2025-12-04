@@ -144,6 +144,11 @@ class Config
         return $this->fromOverrides('servicem8_api_key') ?: $this->getEnv('CA_SERVICEM8_API_KEY', $this->defaults['servicem8_api_key']);
     }
 
+    public function getFrontendUrl(): string
+    {
+        return $this->fromOverrides('frontend_url') ?: $this->getEnv('CA_FRONTEND_URL', 'https://headless-cheapalarms.vercel.app');
+    }
+
     public function isConfigured(): bool
     {
         return $this->getGhlToken() !== '' && $this->getLocationId() !== '' && $this->getUploadSharedSecret() !== '';

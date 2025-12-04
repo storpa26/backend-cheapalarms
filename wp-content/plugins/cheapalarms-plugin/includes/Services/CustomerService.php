@@ -20,6 +20,8 @@ use function wp_login_url;
 use function wp_mail;
 use function wp_update_user;
 use function add_query_arg;
+use function get_option;
+use function trailingslashit;
 
 class CustomerService
 {
@@ -134,7 +136,9 @@ class CustomerService
             );
         }
 
-        $portalUrl = home_url('/portal');
+        // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
+        $frontendUrl = get_option('ca_frontend_url', 'https://headless-cheapalarms.vercel.app');
+        $portalUrl = trailingslashit($frontendUrl) . 'portal';
         $firstName = sanitize_text_field($ghlContact['firstName'] ?? 'Customer');
         $lastName = sanitize_text_field($ghlContact['lastName'] ?? '');
         $name = trim($firstName . ' ' . $lastName) ?: 'Customer';

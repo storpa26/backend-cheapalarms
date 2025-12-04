@@ -27,6 +27,7 @@ use function get_user_meta;
 use function update_user_meta;
 use function home_url;
 use function get_option;
+use function trailingslashit;
 use function gmdate;
 use function strtotime;
 use function mb_substr;
@@ -277,12 +278,15 @@ class QuoteRequestController implements ControllerInterface
             // Step 3: Create portal entry and send invitation
             // Generate invite token
             $inviteToken = bin2hex(random_bytes(16));
+            
+            // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
+            $frontendUrl = $this->config->getFrontendUrl();
             $portalUrl = add_query_arg(
                 [
                     'estimateId' => $estimateId,
                     'inviteToken' => $inviteToken,
                 ],
-                home_url('/portal')
+                trailingslashit($frontendUrl) . 'portal'
             );
 
             // Check if user exists
