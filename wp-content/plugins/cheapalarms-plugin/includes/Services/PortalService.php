@@ -77,7 +77,9 @@ class PortalService
 
     private function resolvePortalUrl(string $estimateId, ?string $token = null): string
     {
-        $base = apply_filters('cheapalarms_portal_base_url', home_url('/portal'));
+        // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
+        $frontendUrl = $this->config->getFrontendUrl();
+        $base = apply_filters('cheapalarms_portal_base_url', trailingslashit($frontendUrl) . 'portal');
         $args = ['estimateId' => $estimateId];
         if ($token) {
             $args['inviteToken'] = $token;

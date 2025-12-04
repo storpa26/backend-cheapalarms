@@ -46,5 +46,8 @@ return [
     // JWT Authentication Secret (changed for production security)
     'jwt_secret'       => 'aB3$kL9@mN2pQ7*xZ4vR8tY6uW1sE5oI0cD2fG4hJ6lM8nP0qS2tV4wX6yA8bC0',
     'jwt_ttl_seconds'  => 3600, // 1 hour
+    
+    // Frontend URL (Next.js on Vercel)
+    'frontend_url'     => 'https://headless-cheapalarms.vercel.app',
 ];
 
