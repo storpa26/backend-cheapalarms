@@ -14,19 +14,20 @@ use function esc_url;
 use function email_exists;
 use function get_option;
 use function get_user_meta;
-use function get_password_reset_key;
 use function get_user_by;
+use function get_password_reset_key;
 use function home_url;
 use function is_wp_error;
+use function rawurlencode;
 use function sanitize_email;
 use function sanitize_text_field;
+use function trailingslashit;
 use function update_option;
 use function update_user_meta;
 use function user_can;
 use function wp_create_user;
 use function wp_generate_password;
 use function wp_mail;
-use function wp_login_url;
 use function wp_update_user;
 
 class PortalService
@@ -1312,16 +1313,18 @@ class PortalService
             ? __('CheapAlarms portal invite (resent)', 'cheapalarms')
             : __('Your CheapAlarms portal is ready', 'cheapalarms');
 
+        // Generate password reset key pointing to Next.js frontend
         $key = get_password_reset_key($user);
         $resetUrl = null;
         if (!is_wp_error($key)) {
+            $frontendUrl = $this->config->getFrontendUrl();
             $resetUrl = add_query_arg(
                 [
-                    'action' => 'rp',
-                    'key'    => $key,
-                    'login'  => rawurlencode($user->user_login),
+                    'key' => $key,
+                    'login' => rawurlencode($user->user_login),
+                    'estimateId' => $estimateId ?: '',
                 ],
-                wp_login_url()
+                trailingslashit($frontendUrl) . 'set-password'
             );
         }
 
@@ -1331,13 +1334,11 @@ class PortalService
         $body  = '<p>' . esc_html($greeting) . '</p>';
         $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the secure links below to access your estimate and manage your installation.', 'cheapalarms')) . '</p>';
         $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
-
+        
         if ($resetUrl) {
-            $body .= '<p><a href="' . esc_url($resetUrl) . '">' . esc_html(__('Set or reset your password', 'cheapalarms')) . '</a></p>';
-        } else {
-            $body .= '<p>' . esc_html(__('If you need to reset your password, use the "Forgot password?" link on the login page.', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
         }
-
+        
         $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
         $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
