@@ -26,11 +26,13 @@ use function wp_json_encode;
 use function get_user_meta;
 use function update_user_meta;
 use function home_url;
-use function wp_mail;
+use function get_option;
 use function gmdate;
 use function strtotime;
 use function mb_substr;
 use function trim;
+use function str_starts_with;
+use function ltrim;
 use function add_query_arg;
 use function get_password_reset_key;
 use function wp_login_url;
@@ -98,7 +100,7 @@ class QuoteRequestController implements ControllerInterface
             ], 400);
         }
         
-        // Sanitize items to match GHL expected structure (5 fields only)
+        // Sanitize items to match GHL expected structure
         $sanitizedItems = [];
         foreach ($items as $item) {
             $itemName = (string)($item['name'] ?? '');
@@ -115,6 +117,7 @@ class QuoteRequestController implements ControllerInterface
                 'currency'    => (string)($item['currency'] ?? 'AUD'),
                 'amount'      => $itemAmount,
                 'qty'         => (int)($item['qty'] ?? $item['quantity'] ?? 1),
+                'type'        => (string)($item['type'] ?? 'one_time'),  // GHL requires this
             ];
         }
         
@@ -192,14 +195,28 @@ class QuoteRequestController implements ControllerInterface
             }
 
             // Step 2: Create estimate in GHL
+            // Format phone to E.164 (GHL might require this)
+            $formattedPhone = '';
+            if ($phone) {
+                $formattedPhone = str_starts_with($phone, '+') 
+                    ? $phone 
+                    : '+61' . ltrim($phone, '0');
+            }
+            
             $estimateData = [
-                'contactId' => $contactId,
                 'altId' => $effectiveLocationId,
                 'altType' => 'location',
                 'name' => mb_substr("Quote - {$firstName} {$lastName}", 0, 40),
                 'title' => 'ESTIMATE',
                 'businessDetails' => [
                     'name' => 'Cheap Alarms',
+                    'address' => [
+                        'addressLine1' => 'Cheap Alarms Pty Ltd',
+                        'city' => 'Brisbane',
+                        'state' => 'QLD',
+                        'postalCode' => '4000',
+                        'countryCode' => 'AU',
+                    ],
                 ],
                 'currency' => 'AUD',
                 'discount' => [
@@ -210,7 +227,14 @@ class QuoteRequestController implements ControllerInterface
                     'id' => $contactId,
                     'email' => $email,
                     'name' => trim("{$firstName} {$lastName}"),
-                    'phoneNo' => $phone,
+                    'phoneNo' => $formattedPhone,
+                    'address' => [
+                        'addressLine1' => '',
+                        'city' => '',
+                        'state' => '',
+                        'postalCode' => '',
+                        'countryCode' => 'AU',
+                    ],
                 ],
                 'issueDate' => gmdate('Y-m-d'),
                 'expiryDate' => gmdate('Y-m-d', strtotime('+30 days')),
@@ -356,9 +380,8 @@ class QuoteRequestController implements ControllerInterface
             // Save portal meta once with all data
             update_option("ca_portal_meta_{$estimateId}", wp_json_encode($portalMeta));
 
-            // Send invitation email (using WordPress wp_mail)
+            // Send invitation email via GHL Conversations API
             $displayName = trim("{$firstName} {$lastName}");
-            $to = $email;
             $subject = __('Your CheapAlarms quote is ready', 'cheapalarms');
             
             $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
@@ -373,12 +396,27 @@ class QuoteRequestController implements ControllerInterface
             $message .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
             $message .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
             
-            $headers = ['Content-Type: text/html; charset=UTF-8'];
-
-            $emailSent = wp_mail($to, $subject, $message, $headers);
-
-            if (!$emailSent) {
-                error_log('Failed to send portal invitation email to: ' . $email);
+            // Send via GHL Conversations API
+            $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
+            
+            $emailPayload = [
+                'contactId' => $contactId,
+                'type' => 'Email',
+                'status' => 'pending',
+                'subject' => $subject,
+                'html' => $message,
+                'emailFrom' => $fromEmail,
+                'locationId' => $effectiveLocationId,
+            ];
+            
+            $emailResult = $this->ghlClient->post('/conversations/messages', $emailPayload);
+            
+            $emailSent = !is_wp_error($emailResult);
+            
+            if ($emailSent) {
+                error_log('[CheapAlarms][INFO] Quote invitation email sent via GHL to: ' . $email);
+            } else {
+                error_log('Failed to send GHL email to: ' . $email . ' - ' . ($emailResult instanceof WP_Error ? $emailResult->get_error_message() : 'Unknown error'));
             }
 
             // Success!
