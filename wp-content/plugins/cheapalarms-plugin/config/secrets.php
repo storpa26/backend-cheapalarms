@@ -17,9 +17,7 @@ return [
         // Production
         'https://cheapalarms.com.au',
         'https://staging.cheapalarms.com.au',
-        // TODO: Add your Vercel URL here after deployment:
-        // 'https://your-project.vercel.app',
-        // 'https://portal.cheapalarms.com',
+        'https://headless-cheapalarms.vercel.app',
         
         // Local Development (keep these for local work)
         'http://localhost',
@@ -33,9 +31,7 @@ return [
         // Production
         'https://cheapalarms.com.au',
         'https://staging.cheapalarms.com.au',
-        // TODO: Add your Vercel URL here after deployment:
-        // 'https://your-project.vercel.app',
-        // 'https://portal.cheapalarms.com',
+        'https://headless-cheapalarms.vercel.app',
         
         // Local Development (keep these for local work)
         'http://localhost:3000',

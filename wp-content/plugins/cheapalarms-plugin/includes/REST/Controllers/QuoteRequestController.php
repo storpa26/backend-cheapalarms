@@ -35,6 +35,8 @@ use function trim;
 use function str_starts_with;
 use function ltrim;
 use function add_query_arg;
+use function get_password_reset_key;
+use function rawurlencode;
 use function esc_url;
 use function esc_html;
 use function __;
@@ -356,7 +358,30 @@ class QuoteRequestController implements ControllerInterface
                 update_user_meta($userId, 'ca_estimate_locations', $locations);
             }
 
-            // Save portal meta (no password reset - users access via invite token)
+            // Generate password reset key for new users (pointing to Next.js frontend)
+            $resetUrl = null;
+            if ($userId) {
+                $user = get_user_by('id', $userId);
+                if ($user) {
+                    $key = get_password_reset_key($user);
+                    if (!is_wp_error($key)) {
+                        $frontendUrl = $this->config->getFrontendUrl();
+                        $resetUrl = add_query_arg(
+                            [
+                                'key' => $key,
+                                'login' => rawurlencode($user->user_login),
+                                'estimateId' => $estimateId,
+                            ],
+                            trailingslashit($frontendUrl) . 'set-password'
+                        );
+                        
+                        // Add reset URL to portal meta
+                        $portalMeta['account']['resetUrl'] = $resetUrl;
+                    }
+                }
+            }
+            
+            // Save portal meta once with all data
             update_option("ca_portal_meta_{$estimateId}", wp_json_encode($portalMeta));
 
             // Send invitation email via GHL Conversations API
@@ -367,6 +392,11 @@ class QuoteRequestController implements ControllerInterface
             $message = '<p>' . $greeting . '</p>';
             $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to view your estimate and upload site photos:', 'cheapalarms')) . '</p>';
             $message .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View My Quote', 'cheapalarms')) . '</a></p>';
+            
+            if ($resetUrl) {
+                $message .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+            }
+            
             $message .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
             $message .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
             

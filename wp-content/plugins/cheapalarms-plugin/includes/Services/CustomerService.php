@@ -8,20 +8,25 @@ use WP_User;
 use CheapAlarms\Plugin\Services\GhlClient;
 use CheapAlarms\Plugin\Services\Logger;
 
+use function add_query_arg;
 use function email_exists;
+use function esc_html;
+use function esc_url;
+use function get_option;
 use function get_password_reset_key;
 use function get_user_by;
+use function rawurlencode;
 use function sanitize_email;
 use function sanitize_text_field;
+use function sprintf;
+use function trailingslashit;
+use function trim;
 use function update_user_meta;
 use function wp_create_user;
 use function wp_generate_password;
-use function wp_login_url;
 use function wp_mail;
 use function wp_update_user;
-use function add_query_arg;
-use function get_option;
-use function trailingslashit;
+use function __;
 
 class CustomerService
 {
@@ -117,25 +122,6 @@ class CustomerService
         // Link GHL contact
         $this->linkGhlContact($userId, $ghlContactId);
 
-        // Send password reset email with portal link
-        $user = get_user_by('id', $userId);
-        if (!$user) {
-            return new WP_Error('user_not_found', 'Failed to retrieve user after creation');
-        }
-
-        $key = get_password_reset_key($user);
-        $resetUrl = null;
-        if (!is_wp_error($key)) {
-            $resetUrl = add_query_arg(
-                [
-                    'action' => 'rp',
-                    'key' => $key,
-                    'login' => rawurlencode($user->user_login),
-                ],
-                wp_login_url()
-            );
-        }
-
         // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
         $frontendUrl = get_option('ca_frontend_url', 'https://headless-cheapalarms.vercel.app');
         $portalUrl = trailingslashit($frontendUrl) . 'portal';
@@ -143,20 +129,31 @@ class CustomerService
         $lastName = sanitize_text_field($ghlContact['lastName'] ?? '');
         $name = trim($firstName . ' ' . $lastName) ?: 'Customer';
 
+        // Generate password reset key pointing to Next.js frontend
+        $key = get_password_reset_key($user);
+        $resetUrl = null;
+        if (!is_wp_error($key)) {
+            $resetUrl = add_query_arg(
+                [
+                    'key' => $key,
+                    'login' => rawurlencode($user->user_login),
+                ],
+                trailingslashit($frontendUrl) . 'set-password'
+            );
+        }
+
         $subject = __('Your CheapAlarms portal is ready', 'cheapalarms');
         $headers = ['Content-Type: text/html; charset=UTF-8'];
         $greeting = sprintf(__('Hi %s,', 'cheapalarms'), $name);
 
         $body = '<p>' . esc_html($greeting) . '</p>';
-        $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the link below to set your password and access your portal.', 'cheapalarms')) . '</p>';
-        $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Access your portal', 'cheapalarms')) . '</a></p>';
-
+        $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the links below to access your portal.', 'cheapalarms')) . '</p>';
+        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Access your portal', 'cheapalarms')) . '</a></p>';
+        
         if ($resetUrl) {
-            $body .= '<p><a href="' . esc_url($resetUrl) . '">' . esc_html(__('Set or reset your password', 'cheapalarms')) . '</a></p>';
-        } else {
-            $body .= '<p>' . esc_html(__('If you need to reset your password, use the "Forgot password?" link on the login page.', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
         }
-
+        
         $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
         // Send via GHL
