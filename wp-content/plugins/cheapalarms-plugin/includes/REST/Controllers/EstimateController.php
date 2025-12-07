@@ -116,10 +116,13 @@ class EstimateController implements ControllerInterface
                 
                 // Check invite token if provided (for unauthenticated access via portal link - read-only)
                 $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? '');
-                if ($inviteToken && $this->portalService->validateInviteToken($estimateId, $inviteToken)) {
-                    // Valid invite token - read-only access
-                    $result = $this->service->getEstimate($request->get_params());
-                    return $this->respond($result, $request);
+                if ($inviteToken) {
+                    $validationResult = $this->portalService->validateInviteToken($estimateId, $inviteToken);
+                    if ($validationResult['valid']) {
+                        // Valid invite token - read-only access
+                        $result = $this->service->getEstimate($request->get_params());
+                        return $this->respond($result, $request);
+                    }
                 }
                 
                 // No valid permission

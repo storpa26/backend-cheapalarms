@@ -96,11 +96,19 @@ class PortalService
     {
         $meta = $this->getMeta($estimateId);
 
-        if ($inviteToken && !$this->validateInviteToken($estimateId, $inviteToken)) {
-            return new WP_Error('invalid_invite', __('The invite link is no longer valid.', 'cheapalarms'), ['status' => 403]);
+        if ($inviteToken) {
+            $validationResult = $this->validateInviteToken($estimateId, $inviteToken);
+            if (!$validationResult['valid']) {
+                return new WP_Error(
+                    $validationResult['reason'] === 'expired' ? 'expired_invite' : 'invalid_invite',
+                    $validationResult['message'] ?? __('The invite link is no longer valid.', 'cheapalarms'),
+                    ['status' => 403, 'reason' => $validationResult['reason']]
+                );
+            }
         }
 
-        $effectiveLocation = $locationId ?: ($meta['locationId'] ?? '');
+        // Resolve locationId: request param → meta → config default (CRITICAL: prevents estimate unavailable)
+        $effectiveLocation = $locationId ?: ($meta['locationId'] ?? $this->config->getLocationId());
 
         if ($user instanceof WP_User && $user->ID > 0 && !$inviteToken && !user_can($user, 'manage_options')) {
             $linked = get_user_meta($user->ID, 'ca_estimate_ids', true);
@@ -218,6 +226,17 @@ class PortalService
             $meta = $this->getMeta($estimateId);
         }
 
+        // Calculate guest mode info
+        $isGuestMode = ($inviteToken && !$user);
+        $daysRemaining = null;
+        if ($isGuestMode && !empty($accountMeta['expiresAt'])) {
+            $expiryTimestamp = strtotime($accountMeta['expiresAt']);
+            if ($expiryTimestamp) {
+                $secondsRemaining = $expiryTimestamp - time();
+                $daysRemaining = max(0, ceil($secondsRemaining / DAY_IN_SECONDS));
+            }
+        }
+
         return [
             'estimateId'   => $estimateId,
             'locationId'   => $locationId, // Include locationId so frontend can use it for GHL sync
@@ -227,6 +246,9 @@ class PortalService
             'documents'    => $meta['documents'] ?? [],
             'account'      => $accountMeta,
             'invoice'      => $meta['invoice'] ?? null,
+            'isGuestMode'  => $isGuestMode,
+            'daysRemaining' => $daysRemaining,
+            'canCreateAccount' => $isGuestMode, // Guests can always create account
         ];
     }
 
@@ -1288,15 +1310,66 @@ class PortalService
         return $current;
     }
 
-    public function validateInviteToken(string $estimateId, string $token): bool
+    /**
+     * Validate invite token with expiration check
+     * @return array{valid: bool, reason: string, message: string, expiresAt: ?string}
+     */
+    public function validateInviteToken(string $estimateId, string $token): array
     {
         if (!$estimateId || !$token) {
-            return false;
+            return [
+                'valid' => false,
+                'reason' => 'missing_params',
+                'message' => __('Invalid invite link parameters.', 'cheapalarms'),
+                'expiresAt' => null,
+            ];
         }
 
-        $accountToken = $this->getMeta($estimateId)['account']['inviteToken'] ?? null;
+        $meta = $this->getMeta($estimateId);
+        $accountToken = $meta['account']['inviteToken'] ?? null;
+        $expiresAt = $meta['account']['expiresAt'] ?? null;
 
-        return is_string($accountToken) && hash_equals($accountToken, $token);
+        // Check if token matches
+        if (!is_string($accountToken) || !hash_equals($accountToken, $token)) {
+            $this->logger->warning('Invalid invite token', [
+                'estimateId' => $estimateId,
+                'tokenProvided' => substr($token, 0, 8) . '...',
+            ]);
+            return [
+                'valid' => false,
+                'reason' => 'invalid_token',
+                'message' => __('This invite link is invalid. Please use the link from your email.', 'cheapalarms'),
+                'expiresAt' => $expiresAt,
+            ];
+        }
+
+        // Check expiration
+        if ($expiresAt) {
+            $expiryTimestamp = strtotime($expiresAt);
+            if ($expiryTimestamp && time() > $expiryTimestamp) {
+                $daysExpired = floor((time() - $expiryTimestamp) / DAY_IN_SECONDS);
+                $this->logger->info('Expired invite token', [
+                    'estimateId' => $estimateId,
+                    'expiredDaysAgo' => $daysExpired,
+                ]);
+                return [
+                    'valid' => false,
+                    'reason' => 'expired',
+                    'message' => sprintf(
+                        __('This invite link expired %d day(s) ago. Please request a new link.', 'cheapalarms'),
+                        $daysExpired
+                    ),
+                    'expiresAt' => $expiresAt,
+                ];
+            }
+        }
+
+        return [
+            'valid' => true,
+            'reason' => 'valid',
+            'message' => '',
+            'expiresAt' => $expiresAt,
+        ];
     }
 
     private function sendPortalInvite(string $email, string $name, string $portalUrl, int $userId, bool $isResend, ?string $contactId = null, ?string $estimateId = null, ?string $locationId = null): ?string

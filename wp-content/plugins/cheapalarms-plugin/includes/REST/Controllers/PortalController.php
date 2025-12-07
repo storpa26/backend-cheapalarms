@@ -90,15 +90,27 @@ class PortalController implements ControllerInterface
                     }
                     
                     // Fallback: check invite token if no authenticated user
-                    if ($inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken)) {
-                        $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, null);
-                        return $this->respond($result, $request);
+                    if ($inviteToken) {
+                        $validationResult = $this->service->validateInviteToken($estimateId, $inviteToken);
+                        if ($validationResult['valid']) {
+                            $result = $this->service->getStatus($estimateId, $locationId, $inviteToken, null);
+                            return $this->respond($result, $request);
+                        }
+                        
+                        // Invalid or expired invite token - return 403 (Forbidden) not 401 (Unauthorized)
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'err' => $validationResult['message'] ?? 'This invite link is invalid or has expired.',
+                            'error' => $validationResult['message'] ?? 'This invite link is invalid or has expired.',
+                            'code' => $validationResult['reason'] === 'expired' ? 'expired_invite' : 'invalid_invite',
+                        ], 403);
                     }
                     
-                    // No valid permission
+                    // No invite token AND no authentication - return 401 (Unauthorized)
                     return new WP_REST_Response([
                         'ok' => false,
                         'err' => 'You need a valid invite link or must log in with a WordPress account that has portal access.',
+                        'error' => 'You need a valid invite link or must log in with a WordPress account that has portal access.',
                     ], 401);
                 } catch (\Exception $e) {
                     // Log the error and return a proper response
@@ -164,6 +176,7 @@ class PortalController implements ControllerInterface
                 $payload    = $request->get_json_params();
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
                 $locationId = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
                 
                 // Input validation
                 if (empty($estimateId)) {
@@ -172,6 +185,18 @@ class PortalController implements ControllerInterface
                 
                 if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                // Block guest mode (read-only access)
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+                if ($inviteToken && (!$user || 0 === $user->ID)) {
+                    return $this->respond(new WP_Error(
+                        'guest_mode_blocked',
+                        __('Please create an account to accept this estimate. Guest access is read-only.', 'cheapalarms'),
+                        ['status' => 403, 'requiresAccount' => true]
+                    ));
                 }
                 
                 $result = $this->service->acceptEstimate($estimateId, $locationId);
@@ -203,6 +228,15 @@ class PortalController implements ControllerInterface
                 $current_user = null;
                 $user = wp_get_current_user();
 
+                // Block guest mode (read-only access)
+                if ($inviteToken && (!$user || 0 === $user->ID)) {
+                    return $this->respond(new WP_Error(
+                        'guest_mode_blocked',
+                        __('Please create an account to create an invoice. Guest access is read-only.', 'cheapalarms'),
+                        ['status' => 403, 'requiresAccount' => true]
+                    ));
+                }
+
                 $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
                 if (is_wp_error($status)) {
                     return $this->respond($status);
@@ -224,6 +258,7 @@ class PortalController implements ControllerInterface
                 $payload    = $request->get_json_params();
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
                 $locationId = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
                 $reason     = sanitize_text_field($payload['reason'] ?? '');
                 
                 // Input validation
@@ -233,6 +268,18 @@ class PortalController implements ControllerInterface
                 
                 if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                // Block guest mode (read-only access)
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+                if ($inviteToken && (!$user || 0 === $user->ID)) {
+                    return $this->respond(new WP_Error(
+                        'guest_mode_blocked',
+                        __('Please create an account to reject this estimate. Guest access is read-only.', 'cheapalarms'),
+                        ['status' => 403, 'requiresAccount' => true]
+                    ));
                 }
                 
                 $result = $this->service->rejectEstimate($estimateId, $locationId, $reason);
@@ -357,7 +404,11 @@ class PortalController implements ControllerInterface
                 if (is_user_logged_in()) {
                     return current_user_can('ca_access_portal') || current_user_can('ca_manage_portal');
                 }
-                return $estimateId && $inviteToken && $this->service->validateInviteToken($estimateId, $inviteToken);
+                if (!$estimateId || !$inviteToken) {
+                    return false;
+                }
+                $validationResult = $this->service->validateInviteToken($estimateId, $inviteToken);
+                return $validationResult['valid'];
             },
             'callback'            => function (WP_REST_Request $request) {
                 $estimateId  = sanitize_text_field($request->get_param('estimateId'));
