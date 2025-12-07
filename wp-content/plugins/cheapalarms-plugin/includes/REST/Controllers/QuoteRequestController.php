@@ -412,11 +412,16 @@ class QuoteRequestController implements ControllerInterface
             
             $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
             $message = '<p>' . $greeting . '</p>';
-            $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to view your estimate and upload site photos:', 'cheapalarms')) . '</p>';
-            $message .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View My Quote', 'cheapalarms')) . '</a></p>';
+            $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to set your password and access your estimate:', 'cheapalarms')) . '</p>';
             
+            // Primary action: Set password button (account creation)
             if ($resetUrl) {
-                $message .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+                $message .= '<p><a href="' . esc_url($resetUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Set Your Password', 'cheapalarms')) . '</a></p>';
+            }
+            
+            // Secondary action: Guest access option
+            if ($portalUrl) {
+                $message .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($portalUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('see your estimate as a guest', 'cheapalarms')) . '</a></p>';
             }
             
             $message .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
