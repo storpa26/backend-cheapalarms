@@ -999,7 +999,8 @@ class PortalService
             ]);
         }
 
-        wp_update_user(['ID' => $userId, 'role' => 'customer']);
+        // Set ca_customer role (has ca_access_portal capability)
+        wp_update_user(['ID' => $userId, 'role' => 'ca_customer']);
         $this->attachEstimateToUser((int) $userId, $estimateId, $locationId);
 
         $token     = $this->generateToken();
@@ -1342,7 +1343,7 @@ class PortalService
         $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
         $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
-        // Send via GHL if contactId available, otherwise fallback to wp_mail
+        // Send via GHL if contactId available (all customer emails must use GHL)
         $sent = false;
         if ($contactId) {
             $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
@@ -1361,11 +1362,13 @@ class PortalService
                 }
             }
             
-            // Final fallback: Use wp_mail if no contactId
+            // No wp_mail fallback - all customer emails must use GHL
+            // If no contactId, log error but don't send via wp_mail
             if (!$sent && !$contactId) {
-                $sent = wp_mail($email, $subject, $body, $headers);
-                $this->logger->info('Portal invite sent via wp_mail (no GHL contactId)', [
+                $this->logger->error('Cannot send portal invite: No GHL contactId available', [
                     'email' => $email,
+                    'userId' => $userId,
+                    'estimateId' => $estimateId,
                 ]);
             }
         }
@@ -1701,8 +1704,8 @@ class PortalService
             $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
             $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
             
-            // Admin dashboard URL
-            $adminUrl = home_url('/admin/estimates?id=' . $estimateId);
+            // Admin dashboard URL (pointing to Next.js frontend)
+            $adminUrl = $this->config->getFrontendUrl() . '/admin/estimates?id=' . $estimateId;
 
             $subject = sprintf('[CheapAlarms] Customer submitted %d photos for Estimate #%s', $photoCount, $estimateNumber);
             $headers = ['Content-Type: text/html; charset=UTF-8'];

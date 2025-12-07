@@ -7,6 +7,7 @@ use WP_User;
 
 use CheapAlarms\Plugin\Services\GhlClient;
 use CheapAlarms\Plugin\Services\Logger;
+use CheapAlarms\Plugin\Services\Container;
 
 use function add_query_arg;
 use function email_exists;
@@ -24,7 +25,6 @@ use function trim;
 use function update_user_meta;
 use function wp_create_user;
 use function wp_generate_password;
-use function wp_mail;
 use function wp_update_user;
 use function __;
 
@@ -32,7 +32,8 @@ class CustomerService
 {
     public function __construct(
         private GhlClient $ghlClient,
-        private Logger $logger
+        private Logger $logger,
+        private Container $container
     ) {
     }
 
@@ -75,7 +76,7 @@ class CustomerService
             'ID' => $userId,
             'first_name' => sanitize_text_field($ghlContact['firstName'] ?? ''),
             'last_name' => sanitize_text_field($ghlContact['lastName'] ?? ''),
-            'role' => 'customer',
+            'role' => 'ca_customer', // Use ca_customer role (has ca_access_portal capability)
         ]);
 
         // Link GHL contact
@@ -111,19 +112,25 @@ class CustomerService
                 return $result;
             }
             $userId = $result;
-        } else {
-            // Ensure user has customer role
-            $user = get_user_by('id', $userId);
-            if ($user && !in_array('customer', $user->roles, true)) {
-                wp_update_user(['ID' => $userId, 'role' => 'customer']);
-            }
+        }
+
+        // Get user object (required for role check and password reset key generation)
+        $user = get_user_by('id', $userId);
+        if (!$user) {
+            return new WP_Error('user_not_found', 'User not found after creation');
+        }
+
+        // Ensure user has ca_customer role (has ca_access_portal capability)
+        if (!in_array('ca_customer', $user->roles, true)) {
+            wp_update_user(['ID' => $userId, 'role' => 'ca_customer']);
         }
 
         // Link GHL contact
         $this->linkGhlContact($userId, $ghlContactId);
 
         // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
-        $frontendUrl = get_option('ca_frontend_url', 'https://headless-cheapalarms.vercel.app');
+        $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
+        $frontendUrl = $config->getFrontendUrl();
         $portalUrl = trailingslashit($frontendUrl) . 'portal';
         $firstName = sanitize_text_field($ghlContact['firstName'] ?? 'Customer');
         $lastName = sanitize_text_field($ghlContact['lastName'] ?? '');
