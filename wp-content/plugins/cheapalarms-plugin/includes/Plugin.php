@@ -161,7 +161,8 @@ class Plugin
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\CustomerService::class, fn () => new \CheapAlarms\Plugin\Services\CustomerService(
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
-            $this->container->get(Logger::class)
+            $this->container->get(Logger::class),
+            $this->container
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\GhlSignalService::class, fn () => new \CheapAlarms\Plugin\Services\GhlSignalService(
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),

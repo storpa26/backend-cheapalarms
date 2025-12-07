@@ -312,6 +312,12 @@ class QuoteRequestController implements ControllerInterface
                         ]);
                     }
                 }
+            } else {
+                // Ensure existing user has ca_customer role (has ca_access_portal capability)
+                $user = get_user_by('id', $userId);
+                if ($user && !in_array('ca_customer', $user->roles, true)) {
+                    wp_update_user(['ID' => $userId, 'role' => 'ca_customer']);
+                }
             }
 
             // Build portal meta (will be saved after password reset generation)
@@ -381,8 +387,24 @@ class QuoteRequestController implements ControllerInterface
                 }
             }
             
-            // Save portal meta once with all data
-            update_option("ca_portal_meta_{$estimateId}", wp_json_encode($portalMeta));
+            // Save portal meta once with all data (CRITICAL: Portal access depends on this)
+            $jsonMeta = wp_json_encode($portalMeta);
+            if ($jsonMeta === false) {
+                error_log('[CheapAlarms][ERROR] Failed to encode portal meta JSON for estimate: ' . $estimateId);
+                return new WP_REST_Response([
+                    'ok' => false,
+                    'error' => 'Failed to save portal data. Please contact support.',
+                ], 500);
+            }
+            
+            $metaSaved = update_option("ca_portal_meta_{$estimateId}", $jsonMeta);
+            if (!$metaSaved) {
+                error_log('[CheapAlarms][ERROR] Failed to save portal meta for estimate: ' . $estimateId);
+                return new WP_REST_Response([
+                    'ok' => false,
+                    'error' => 'Failed to save portal data. Please contact support.',
+                ], 500);
+            }
 
             // Send invitation email via GHL Conversations API
             $displayName = trim("{$firstName} {$lastName}");

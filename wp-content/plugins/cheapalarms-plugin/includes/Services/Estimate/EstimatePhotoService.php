@@ -104,7 +104,9 @@ class EstimatePhotoService
      */
     public function buildPhotoBanner(string $estimateId): string
     {
-        $link = esc_url_raw(site_url('/upload?estimateId=' . rawurlencode($estimateId)));
+        // Use frontend URL (Next.js) instead of WordPress backend
+        $frontendUrl = $this->config->getFrontendUrl();
+        $link = esc_url_raw($frontendUrl . '/upload?estimateId=' . rawurlencode($estimateId));
 
         return '<p><strong>Upload photos for this estimate:</strong> '
             . '<a href="' . $link . '" target="_blank" rel="noopener">' . $link . '</a></p>';
