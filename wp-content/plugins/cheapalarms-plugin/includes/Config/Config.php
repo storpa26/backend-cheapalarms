@@ -2,6 +2,7 @@
 
 namespace CheapAlarms\Plugin\Config;
 
+use function sanitize_text_field;
 use function wp_salt;
 
 class Config
@@ -152,6 +153,26 @@ class Config
     public function isConfigured(): bool
     {
         return $this->getGhlToken() !== '' && $this->getLocationId() !== '' && $this->getUploadSharedSecret() !== '';
+    }
+
+    public function getUserId(): ?string
+    {
+        // Check secrets.php first, then environment variable, then WordPress option
+        $secrets = $this->fromOverrides('ghl_user_id');
+        if ($secrets !== null && $secrets !== '') {
+            return sanitize_text_field($secrets);
+        }
+        
+        if (defined('CA_GHL_USER_ID') && CA_GHL_USER_ID) {
+            return sanitize_text_field(CA_GHL_USER_ID);
+        }
+        
+        $option = get_option('ca_ghl_user_id', null);
+        if ($option) {
+            return sanitize_text_field($option);
+        }
+        
+        return null;
     }
 
     private function getEnv(string $key, $default = '')

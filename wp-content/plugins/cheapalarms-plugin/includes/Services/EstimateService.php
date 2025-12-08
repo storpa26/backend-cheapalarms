@@ -5,11 +5,14 @@ namespace CheapAlarms\Plugin\Services;
 use CheapAlarms\Plugin\Config\Config;
 use WP_Error;
 
+use function add_query_arg;
+use function current_time;
 use function esc_url_raw;
 use function get_option;
 use function sanitize_email;
 use function sanitize_text_field;
 use function site_url;
+use function trailingslashit;
 use function update_option;
 use function wp_json_encode;
 
@@ -18,7 +21,8 @@ class EstimateService
     public function __construct(
         private Config $config,
         private GhlClient $client,
-        private Logger $logger
+        private Logger $logger,
+        private \CheapAlarms\Plugin\Services\Container $container
     ) {
     }
 
@@ -404,7 +408,8 @@ class EstimateService
     }
 
     /**
-     * Send estimate via GHL API.
+     * Send estimate via our portal system (bypasses GHL's broken send endpoint).
+     * Uses GHL Conversations API to send email with portal invite link.
      *
      * @param string $estimateId Estimate ID
      * @param string $locationId Location ID
@@ -424,24 +429,219 @@ class EstimateService
             return new WP_Error('missing_location', __('Location ID required to send estimate.', 'cheapalarms'), ['status' => 400]);
         }
 
-        $payload = array_merge([
-            'altId'   => $locationId,
-            'altType' => 'location',
-        ], $options);
-
-        // GHL API: POST /invoices/estimate/{id}/send
-        $response = $this->client->post(
-            '/invoices/estimate/' . rawurlencode($estimateId) . '/send',
-            $payload,
-            30,
-            $locationId
-        );
-
-        if (is_wp_error($response)) {
-            return $response;
+        // Get portal meta to check status and rate limiting
+        $portalMeta = $this->getPortalMeta($estimateId);
+        $quoteStatus = $portalMeta['quote']['status'] ?? 'sent';
+        
+        // Optional: Prevent sending rejected estimates (can be overridden with force flag)
+        if ($quoteStatus === 'rejected' && empty($options['force'])) {
+            return new WP_Error('already_rejected', __('Cannot send estimate that has been rejected.', 'cheapalarms'), ['status' => 400]);
         }
 
-        return ['ok' => true, 'result' => $response];
+        // Rate limiting: Prevent sending again within 30 seconds (prevents accidental double-clicks)
+        $lastSentAt = $portalMeta['quote']['sentAt'] ?? null;
+        if ($lastSentAt) {
+            $lastSentTimestamp = strtotime($lastSentAt);
+            $timeSinceLastSend = time() - $lastSentTimestamp;
+            if ($timeSinceLastSend < 30) {
+                $secondsRemaining = 30 - $timeSinceLastSend;
+                return new WP_Error(
+                    'rate_limit',
+                    sprintf(__('Please wait %d seconds before sending again. Estimate was just sent.', 'cheapalarms'), $secondsRemaining),
+                    ['status' => 429, 'retryAfter' => $secondsRemaining]
+                );
+            }
+        }
+
+        // Fetch estimate to get contact information
+        $estimate = $this->getEstimate([
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+        ]);
+
+        if (is_wp_error($estimate)) {
+            return $estimate;
+        }
+
+        $contact = $estimate['contact'] ?? [];
+        $email = sanitize_email($contact['email'] ?? '');
+        
+        if (!$email) {
+            return new WP_Error(
+                'missing_contact',
+                __('Estimate is missing contact email. Cannot send estimate.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+
+        // Use PortalService to send estimate-specific email (GHL Conversations API)
+        // This bypasses GHL's broken send endpoint and uses our reliable email system
+        $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
+        
+        // Ensure portal account exists and get portal URL
+        $accountMeta = $portalMeta['account'] ?? [];
+        $existingUserId = isset($accountMeta['userId']) ? (int) $accountMeta['userId'] : null;
+
+        if (!$existingUserId) {
+            // No account yet - provision account first
+            $provisionResult = $portalService->provisionAccount($estimateId, $contact, $locationId);
+            if (is_wp_error($provisionResult)) {
+                return $provisionResult;
+            }
+            // Refresh meta to get updated portal URL
+            $portalMeta = $this->getPortalMeta($estimateId);
+            $accountMeta = $portalMeta['account'] ?? [];
+        } else {
+            // Account exists - ensure portal URL and invite token are set
+            if (empty($accountMeta['portalUrl']) || empty($accountMeta['inviteToken'])) {
+                // Generate new token and portal URL
+                $token = bin2hex(random_bytes(16));
+                $frontendUrl = $this->config->getFrontendUrl();
+                $portalUrl = add_query_arg(
+                    [
+                        'estimateId' => $estimateId,
+                        'inviteToken' => $token,
+                    ],
+                    trailingslashit($frontendUrl) . 'portal'
+                );
+                
+                $accountMeta['inviteToken'] = $token;
+                $accountMeta['portalUrl'] = $portalUrl;
+                $accountMeta['expiresAt'] = gmdate('c', current_time('timestamp') + DAY_IN_SECONDS * 7);
+                
+                // Update portal meta
+                $this->updatePortalMeta($estimateId, ['account' => $accountMeta]);
+            }
+        }
+
+        // Get portal URL and reset URL
+        $portalUrl = $accountMeta['portalUrl'] ?? '';
+        $resetUrl = $accountMeta['resetUrl'] ?? null;
+
+        // If portal URL is still empty, generate it
+        if (empty($portalUrl)) {
+            $token = $accountMeta['inviteToken'] ?? bin2hex(random_bytes(16));
+            $frontendUrl = $this->config->getFrontendUrl();
+            $portalUrl = add_query_arg(
+                [
+                    'estimateId' => $estimateId,
+                    'inviteToken' => $token,
+                ],
+                trailingslashit($frontendUrl) . 'portal'
+            );
+        }
+
+        // Send estimate-specific email (not generic portal invite)
+        $sent = $portalService->sendEstimateEmail($estimateId, $contact, $locationId, $portalUrl, $resetUrl);
+
+        if (!$sent) {
+            return new WP_Error(
+                'email_failed',
+                __('Failed to send estimate email. Please check contact email and try again.', 'cheapalarms'),
+                ['status' => 500]
+            );
+        }
+
+        // Update portal meta to track sent status
+        $sentAt = current_time('mysql');
+        $sendCount = ($portalMeta['quote']['sendCount'] ?? 0) + 1;
+        $method = $options['method'] ?? 'email';
+        
+        // Update quote meta with sent tracking
+        $quoteUpdate = array_merge($portalMeta['quote'] ?? [], [
+            'sentAt' => $sentAt,
+            'sendCount' => $sendCount,
+            'lastSentMethod' => $method,
+            // Only update status to 'sent' if it's not already accepted/rejected
+            // This preserves acceptance/rejection status while tracking sends
+            'status' => in_array($quoteStatus, ['accepted', 'rejected']) ? $quoteStatus : 'sent',
+            'statusLabel' => in_array($quoteStatus, ['accepted', 'rejected']) 
+                ? ($portalMeta['quote']['statusLabel'] ?? 'Sent') 
+                : 'Sent',
+        ]);
+        
+        $this->updatePortalMeta($estimateId, ['quote' => $quoteUpdate]);
+
+        $this->logger->info('Estimate sent via portal system', [
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+            'email' => $email,
+            'method' => $method,
+            'sendCount' => $sendCount,
+            'viaPortal' => true,
+        ]);
+
+        return [
+            'ok' => true,
+            'sentAt' => $sentAt,
+            'sendCount' => $sendCount,
+            'viaPortal' => true,
+            'message' => __('Estimate sent successfully via portal invite email.', 'cheapalarms'),
+        ];
+    }
+
+    /**
+     * Get portal meta for an estimate.
+     *
+     * @param string $estimateId
+     * @return array<string, mixed>
+     */
+    private function getPortalMeta(string $estimateId): array
+    {
+        $stored = get_option('ca_portal_meta_' . $estimateId, '{}');
+        $decoded = json_decode($stored, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return [];
+        }
+        return $decoded;
+    }
+
+    /**
+     * Update portal meta for an estimate.
+     * Uses simple update (no locking) - should be fine for send tracking.
+     *
+     * @param string $estimateId
+     * @param array<string, mixed> $changes
+     * @return bool
+     */
+    private function updatePortalMeta(string $estimateId, array $changes): bool
+    {
+        $current = $this->getPortalMeta($estimateId);
+        
+        // Deep merge to preserve nested structures
+        $merged = $this->deepMergeMeta($current, $changes);
+        
+        $result = update_option('ca_portal_meta_' . $estimateId, wp_json_encode($merged), false);
+        
+        if (!$result) {
+            $this->logger->warning('Failed to update portal meta after sending estimate', [
+                'estimateId' => $estimateId,
+                'changes' => array_keys($changes),
+            ]);
+        }
+        
+        return $result;
+    }
+
+    /**
+     * Deep merge arrays, preserving nested structures.
+     *
+     * @param array<string, mixed> $current
+     * @param array<string, mixed> $changes
+     * @return array<string, mixed>
+     */
+    private function deepMergeMeta(array $current, array $changes): array
+    {
+        foreach ($changes as $key => $value) {
+            if (isset($current[$key]) && is_array($current[$key]) && is_array($value)) {
+                // Recursively merge nested arrays
+                $current[$key] = $this->deepMergeMeta($current[$key], $value);
+            } else {
+                // Overwrite or add new value
+                $current[$key] = $value;
+            }
+        }
+        return $current;
     }
 
     /**

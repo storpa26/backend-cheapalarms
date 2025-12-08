@@ -1516,6 +1516,92 @@ class PortalService
     }
 
     /**
+     * Send estimate-specific email (for admin "Send Estimate" action).
+     * Different from generic portal invite - focuses on the estimate.
+     *
+     * @param string $estimateId Estimate ID
+     * @param array $contact Contact array from estimate
+     * @param string $locationId Location ID
+     * @param string $portalUrl Portal URL with invite token
+     * @param string|null $resetUrl Password reset URL (if account exists)
+     * @return bool Success status
+     */
+    public function sendEstimateEmail(string $estimateId, array $contact, string $locationId, string $portalUrl, ?string $resetUrl = null): bool
+    {
+        $email = sanitize_email($contact['email'] ?? '');
+        if (!$email) {
+            $this->logger->warning('Cannot send estimate email: No contact email', [
+                'estimateId' => $estimateId,
+            ]);
+            return false;
+        }
+
+        $contactId = $contact['id'] ?? null;
+        if (!$contactId) {
+            $this->logger->warning('Cannot send estimate email: No GHL contact ID', [
+                'estimateId' => $estimateId,
+                'email' => $email,
+            ]);
+            return false;
+        }
+
+        // Get estimate details for email content
+        $estimate = $this->estimateService->getEstimate([
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+        ]);
+
+        $estimateNumber = null;
+        if (!is_wp_error($estimate)) {
+            $estimateNumber = $estimate['estimateNumber'] ?? $estimate['id'] ?? $estimateId;
+        }
+
+        $displayName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+        
+        // Subject: Estimate-specific
+        $subject = $estimateNumber 
+            ? sprintf(__('Your estimate #%s is ready', 'cheapalarms'), $estimateNumber)
+            : __('Your estimate is ready', 'cheapalarms');
+
+        // Email body: Estimate-focused
+        $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
+        $body = '<p>' . $greeting . '</p>';
+        
+        if ($estimateNumber) {
+            $body .= '<p>' . esc_html(sprintf(
+                __('Your estimate #%s is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms'),
+                $estimateNumber
+            )) . '</p>';
+        } else {
+            $body .= '<p>' . esc_html(__('Your estimate is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms')) . '</p>';
+        }
+
+        // Primary CTA: View Estimate (portal link)
+        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View Your Estimate', 'cheapalarms')) . '</a></p>';
+
+        // Secondary action: Set password (if account exists but password not set)
+        if ($resetUrl) {
+            $body .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('set your password to access your account', 'cheapalarms')) . '</a></p>';
+        }
+
+        $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
+        $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+        // Send via GHL Conversations API
+        $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+
+        $this->logger->info('Estimate email sent', [
+            'estimateId' => $estimateId,
+            'estimateNumber' => $estimateNumber,
+            'email' => $email,
+            'contactId' => $contactId,
+            'sent' => $sent,
+        ]);
+
+        return $sent;
+    }
+
+    /**
      * Send invoice ready email to customer
      * @param string $estimateId
      * @param string $locationId
