@@ -131,7 +131,8 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\EstimateService::class, fn () => new \CheapAlarms\Plugin\Services\EstimateService(
             $this->container->get(Config::class),
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
-            $this->container->get(Logger::class)
+            $this->container->get(Logger::class),
+            $this->container
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\InvoiceService::class, fn () => new \CheapAlarms\Plugin\Services\InvoiceService(
             $this->container->get(Config::class),

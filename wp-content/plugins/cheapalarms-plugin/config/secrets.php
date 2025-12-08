@@ -45,5 +45,10 @@ return [
     
     // Frontend URL (Next.js on Vercel)
     'frontend_url'     => 'https://headless-cheapalarms.vercel.app',
+    
+    // GHL User ID (authorized employee/user ID for sending estimates)
+    // Get this from your GHL account settings or API
+    // This is required for the send estimate endpoint
+    'ghl_user_id'      => '', // TODO: Add your GHL authorized employee/user ID here
 ];
 
