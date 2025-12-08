@@ -271,3 +271,36 @@
 [08-Dec-2025 07:04:25 UTC] [CheapAlarms Plugin] registering EstimateController routes
 [08-Dec-2025 07:04:25 UTC] [CheapAlarms][WARNING] GHL non-2xx response {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/6934f672f651c1d45cc881be?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1","code":404,"body":"{\"message\":\"Cannot GET \/invoices\/estimate\/6934f672f651c1d45cc881be?altId=aLTXtdwNknfmEFo3WBIX&altType=location&raw=1\",\"error\":\"Not Found\",\"statusCode\":404}","request":[]}
 [08-Dec-2025 07:04:25 UTC] [CheapAlarms][INFO] GHL API Request {"url":"https:\/\/services.leadconnectorhq.com\/invoices\/estimate\/list?altId=aLTXtdwNknfmEFo3WBIX&altType=location&limit=50&offset=0","headers":["Authorization","Accept","Content-Type","Version"],"hasLocationIdHeader":false}
+[08-Dec-2025 08:11:34 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:11:37 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:11:39 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:11:46 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:11:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:11:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:12:11 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:12:19 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:13:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:13:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:13:18 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:14:22 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:15:21 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:16:37 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:17:25 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:17:48 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:18:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:20:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:22:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:24:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:14 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:17 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:20 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:29 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:49 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:51 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:52 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:54 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:26:59 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:27:01 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:27:26 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:28:27 UTC] [CheapAlarms Plugin] bootstrap executing
+[08-Dec-2025 08:29:29 UTC] [CheapAlarms Plugin] bootstrap executing
