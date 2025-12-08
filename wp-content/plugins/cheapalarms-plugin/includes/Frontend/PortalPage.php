@@ -93,7 +93,8 @@ class PortalPage
         }
 
         $roles = (array) $user->roles;
-        if (!in_array('customer', $roles, true)) {
+        // Check for ca_customer role (customers should go to portal)
+        if (!in_array('ca_customer', $roles, true)) {
             return $redirectTo;
         }
 
@@ -108,7 +109,8 @@ class PortalPage
         }
 
         $roles = (array) $user->roles;
-        if (!in_array('customer', $roles, true)) {
+        // Check for ca_customer role (customers should go to portal)
+        if (!in_array('ca_customer', $roles, true)) {
             return $redirect;
         }
 
