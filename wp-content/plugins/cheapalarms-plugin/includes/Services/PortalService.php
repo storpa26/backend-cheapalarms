@@ -140,8 +140,14 @@ class PortalService
         }
 
         if ($effectiveLocation) {
-            $meta['locationId'] = $effectiveLocation;
-            $this->updateMeta($estimateId, ['locationId' => $effectiveLocation]);
+            // Only update if locationId changed (prevents false positive warnings)
+            if (($meta['locationId'] ?? '') !== $effectiveLocation) {
+                $meta['locationId'] = $effectiveLocation;
+                $this->updateMeta($estimateId, ['locationId' => $effectiveLocation]);
+            } else {
+                // Ensure local copy is set even if no update needed
+                $meta['locationId'] = $effectiveLocation;
+            }
         }
         $locationId = $effectiveLocation;
 
@@ -246,6 +252,9 @@ class PortalService
             'documents'    => $meta['documents'] ?? [],
             'account'      => $accountMeta,
             'invoice'      => $meta['invoice'] ?? null,
+            'workflow'     => $meta['workflow'] ?? null, // Include workflow data for customer portal
+            'booking'     => $meta['booking'] ?? null, // Include booking data for customer portal
+            'payment'     => $meta['payment'] ?? null, // Include payment data for customer portal
             'isGuestMode'  => $isGuestMode,
             'daysRemaining' => $daysRemaining,
             'canCreateAccount' => $isGuestMode, // Guests can always create account
@@ -335,8 +344,38 @@ class PortalService
                 'canAccept'   => false,
             ];
 
+            // Initialize or update workflow status to "accepted"
+            $meta = $this->getMeta($estimateId);
+            $workflow = $meta['workflow'] ?? [];
+            
+            // Initialize workflow if it doesn't exist
+            if (empty($workflow) || !isset($workflow['status'])) {
+                $workflow = [
+                    'status' => 'accepted',
+                    'currentStep' => 3,
+                    'requestedAt' => $meta['quote']['createdAt'] ?? current_time('mysql'),
+                    'acceptedAt' => current_time('mysql'),
+                ];
+            } else {
+                // Update existing workflow
+                $workflow['status'] = 'accepted';
+                $workflow['currentStep'] = 3;
+                $workflow['acceptedAt'] = current_time('mysql');
+                
+                // Preserve existing timestamps
+                if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+                    $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+                }
+                if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
+                    $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
+                }
+            }
+
             // Update WordPress meta first (always succeeds)
-            $updateResult = $this->updateMeta($estimateId, ['quote' => $status]);
+            $updateResult = $this->updateMeta($estimateId, [
+                'quote' => $status,
+                'workflow' => $workflow,
+            ]);
             if (!$updateResult) {
                 $this->logger->error('Failed to update portal meta on acceptance', [
                     'estimateId' => $estimateId,
@@ -781,8 +820,10 @@ class PortalService
             if (!$resolvedLocation) {
                 return new WP_Error('missing_location', __('Location ID required to create invoice.', 'cheapalarms'), ['status' => 400]);
             }
-            // Store resolved location in meta for future use
-            $this->updateMeta($estimateId, ['locationId' => $resolvedLocation]);
+            // Store resolved location in meta for future use (only if it changed)
+            if (($meta['locationId'] ?? '') !== $resolvedLocation) {
+                $this->updateMeta($estimateId, ['locationId' => $resolvedLocation]);
+            }
         }
 
         // Create invoice directly from draft estimate (no need to accept estimate first)
@@ -866,13 +907,205 @@ class PortalService
             $this->sendInvoiceReadyEmail($estimateId, $resolvedLocation, $invoice);
         }
 
-        return [
-            'invoice' => $invoice,
-        ];
+            return [
+                'invoice' => $invoice,
+            ];
         } finally {
             // Always release lock at the end, even if there's an error
             delete_transient($lockKey);
         }
+    }
+
+    /**
+     * Book installation date/time for an accepted estimate
+     * Transitions workflow from "accepted" to "booked"
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array{date: string, time: string, notes?: string} $bookingData Booking information
+     * @return array|WP_Error
+     */
+    public function bookJob(string $estimateId, string $locationId = '', array $bookingData = [])
+    {
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        $meta = $this->getMeta($estimateId);
+        
+        // Validate estimate is accepted
+        $quoteStatus = $meta['quote']['status'] ?? 'sent';
+        if ($quoteStatus !== 'accepted') {
+            return new WP_Error(
+                'invalid_status',
+                __('Estimate must be accepted before booking. Current status: ' . $quoteStatus, 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+
+        // Validate booking data
+        $scheduledDate = sanitize_text_field($bookingData['date'] ?? '');
+        $scheduledTime = sanitize_text_field($bookingData['time'] ?? '');
+        $notes = sanitize_text_field($bookingData['notes'] ?? '');
+
+        if (!$scheduledDate || !$scheduledTime) {
+            return new WP_Error('bad_request', __('Date and time are required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Combine date and time
+        $scheduledDateTime = $scheduledDate . ' ' . $scheduledTime;
+        $timestamp = strtotime($scheduledDateTime);
+        if (!$timestamp) {
+            return new WP_Error('bad_request', __('Invalid date/time format', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Update booking data
+        $booking = [
+            'scheduledDate' => $scheduledDate,
+            'scheduledTime' => $scheduledTime,
+            'scheduledDateTime' => date('Y-m-d H:i:s', $timestamp),
+            'notes' => $notes,
+            'status' => 'scheduled',
+            'bookedAt' => current_time('mysql'),
+        ];
+
+        // Update workflow status to "booked"
+        $workflow = $meta['workflow'] ?? [];
+        $workflow['status'] = 'booked';
+        $workflow['currentStep'] = 4;
+        $workflow['bookedAt'] = current_time('mysql');
+        
+        // Preserve existing timestamps
+        if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+            $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+        }
+        if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
+            $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
+        }
+        if (!isset($workflow['acceptedAt']) && isset($meta['workflow']['acceptedAt'])) {
+            $workflow['acceptedAt'] = $meta['workflow']['acceptedAt'];
+        }
+
+        // Update meta
+        $this->updateMeta($estimateId, [
+            'booking' => $booking,
+            'workflow' => $workflow,
+        ]);
+
+        $this->logger->info('Job booked successfully', [
+            'estimateId' => $estimateId,
+            'scheduledDateTime' => $scheduledDateTime,
+        ]);
+
+        // Send booking confirmation email (non-blocking)
+        if ($locationId) {
+            $this->sendBookingConfirmationEmail($estimateId, $locationId, $booking);
+        }
+
+        return [
+            'ok' => true,
+            'booking' => $booking,
+            'workflow' => $workflow,
+        ];
+    }
+
+    /**
+     * Confirm payment for a booked estimate
+     * Transitions workflow from "booked" to "paid"
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array{amount: float, provider?: string, transactionId?: string} $paymentData Payment information
+     * @return array|WP_Error
+     */
+    public function confirmPayment(string $estimateId, string $locationId = '', array $paymentData = [])
+    {
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        $meta = $this->getMeta($estimateId);
+        
+        // Validate estimate is booked
+        $workflowStatus = $meta['workflow']['status'] ?? 'requested';
+        if ($workflowStatus !== 'booked') {
+            return new WP_Error(
+                'invalid_status',
+                __('Estimate must be booked before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+
+        // Get payment amount (from payment data or calculate from invoice)
+        $amount = isset($paymentData['amount']) ? (float) $paymentData['amount'] : null;
+        if ($amount === null) {
+            // Try to get from invoice
+            $invoice = $meta['invoice'] ?? null;
+            if ($invoice && isset($invoice['ghl']['total'])) {
+                $amount = (float) $invoice['ghl']['total'];
+            } elseif ($invoice && isset($invoice['total'])) {
+                $amount = (float) $invoice['total'];
+            } else {
+                return new WP_Error('bad_request', __('Payment amount is required', 'cheapalarms'), ['status' => 400]);
+            }
+        }
+
+        if ($amount <= 0) {
+            return new WP_Error('bad_request', __('Payment amount must be greater than zero', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Update payment data
+        $payment = [
+            'amount' => $amount,
+            'status' => 'paid',
+            'provider' => sanitize_text_field($paymentData['provider'] ?? 'mock'),
+            'transactionId' => sanitize_text_field($paymentData['transactionId'] ?? null),
+            'paidAt' => current_time('mysql'),
+        ];
+
+        // Update workflow status to "paid"
+        $workflow = $meta['workflow'] ?? [];
+        $workflow['status'] = 'paid';
+        $workflow['currentStep'] = 5;
+        $workflow['paidAt'] = current_time('mysql');
+        
+        // Preserve existing timestamps
+        if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+            $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+        }
+        if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
+            $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
+        }
+        if (!isset($workflow['acceptedAt']) && isset($meta['workflow']['acceptedAt'])) {
+            $workflow['acceptedAt'] = $meta['workflow']['acceptedAt'];
+        }
+        if (!isset($workflow['bookedAt']) && isset($meta['workflow']['bookedAt'])) {
+            $workflow['bookedAt'] = $meta['workflow']['bookedAt'];
+        }
+
+        // Update meta
+        $this->updateMeta($estimateId, [
+            'payment' => $payment,
+            'workflow' => $workflow,
+        ]);
+
+        $this->logger->info('Payment confirmed successfully', [
+            'estimateId' => $estimateId,
+            'amount' => $amount,
+        ]);
+
+        // Send payment confirmation email (non-blocking)
+        if ($locationId) {
+            $this->sendPaymentConfirmationEmail($estimateId, $locationId, $payment);
+        }
+
+        return [
+            'ok' => true,
+            'payment' => $payment,
+            'workflow' => $workflow,
+        ];
     }
 
     private function extractGhlErrorMessage(WP_Error $error): string
@@ -978,9 +1211,37 @@ class PortalService
         $photos['submitted_at'] = current_time('mysql');
         $photos['last_edited_at'] = current_time('mysql');
         
-        // Update meta
-        $meta['photos'] = $photos;
-        update_option(self::OPTION_PREFIX . $estimateId, wp_json_encode($meta), false);
+        // Update workflow to "reviewing" if still "requested"
+        $workflow = $meta['workflow'] ?? [];
+        $currentWorkflowStatus = $workflow['status'] ?? 'requested';
+        
+        if ($currentWorkflowStatus === 'requested') {
+            // Initialize workflow if it doesn't exist
+            if (empty($workflow) || !isset($workflow['status'])) {
+                $workflow = [
+                    'status' => 'reviewing',
+                    'currentStep' => 2,
+                    'requestedAt' => current_time('mysql'),
+                    'reviewedAt' => current_time('mysql'),
+                ];
+            } else {
+                // Update existing workflow
+                $workflow['status'] = 'reviewing';
+                $workflow['currentStep'] = 2;
+                $workflow['reviewedAt'] = current_time('mysql');
+                
+                // Preserve requestedAt if it exists
+                if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+                    $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+                }
+            }
+        }
+        
+        // Update meta using updateMeta() for proper locking (not update_option directly)
+        $this->updateMeta($estimateId, [
+            'photos' => $photos,
+            'workflow' => $workflow,
+        ]);
         
         // Send notification to admin
         $this->sendPhotoSubmissionNotificationToAdmin($estimateId, $locationId, $photos['total']);
@@ -1257,13 +1518,32 @@ class PortalService
                 // Deep merge to preserve nested structures
                 $merged = $this->deepMerge($current, $changes);
                 
+                // Check if value actually changed (update_option returns false if no change)
+                $currentJson = wp_json_encode($current);
+                $mergedJson = wp_json_encode($merged);
+                
+                // Validate JSON encoding succeeded (wp_json_encode returns false on failure)
+                if ($currentJson === false || $mergedJson === false) {
+                    delete_transient($lockKey);
+                    $this->logger->error('Failed to encode portal meta JSON', [
+                        'estimateId' => $estimateId,
+                        'currentError' => json_last_error_msg(),
+                        'mergedError' => json_last_error_msg(),
+                    ]);
+                    return false;
+                }
+                
+                $valueChanged = ($currentJson !== $mergedJson);
+                
                 // Update atomically
-                $result = update_option(self::OPTION_PREFIX . $estimateId, wp_json_encode($merged), false);
+                $result = update_option(self::OPTION_PREFIX . $estimateId, $mergedJson, false);
                 
                 // Release lock
                 delete_transient($lockKey);
                 
-                if (!$result) {
+                // Only log warning if value changed but update failed
+                // update_option() returns false when value hasn't changed, which is normal
+                if (!$result && $valueChanged) {
                     $this->logger->warning('Failed to update portal meta', [
                         'estimateId' => $estimateId,
                         'changes' => array_keys($changes),
@@ -1804,6 +2084,478 @@ class PortalService
         }
     }
 
+    /**
+     * Send booking confirmation email to customer via GHL
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $booking Booking data
+     */
+    private function sendBookingConfirmationEmail(string $estimateId, string $locationId, array $booking): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for booking email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for booking confirmation', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+            
+            // Format booking date
+            $scheduledDate = $booking['scheduledDate'] ?? '';
+            $scheduledTime = $booking['scheduledTime'] ?? '';
+            $notes = $booking['notes'] ?? '';
+            
+            $formattedDate = '';
+            if ($scheduledDate) {
+                try {
+                    $dateObj = new \DateTime($scheduledDate);
+                    $formattedDate = $dateObj->format('l, F j, Y'); // e.g., "Monday, December 3, 2024"
+                } catch (\Exception $e) {
+                    $formattedDate = $scheduledDate;
+                }
+            }
+            
+            // Format time
+            $formattedTime = '';
+            if ($scheduledTime) {
+                try {
+                    $timeObj = \DateTime::createFromFormat('H:i', $scheduledTime);
+                    if ($timeObj) {
+                        $formattedTime = $timeObj->format('g:i A'); // e.g., "2:30 PM"
+                    } else {
+                        $formattedTime = $scheduledTime;
+                    }
+                } catch (\Exception $e) {
+                    $formattedTime = $scheduledTime;
+                }
+            }
+
+            $subject = __('Your installation has been scheduled', 'cheapalarms');
+            
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            $body .= '<p>' . esc_html(__('Great news! Your installation has been scheduled.', 'cheapalarms')) . '</p>';
+            
+            $body .= '<div style="background-color: #f0f9ff; border-left: 4px solid #c95375; padding: 16px; margin: 20px 0;">';
+            $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Installation Details:', 'cheapalarms')) . '</strong></p>';
+            if ($formattedDate) {
+                $body .= '<p style="margin: 4px 0;">📅 <strong>' . esc_html(__('Date:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+            }
+            if ($formattedTime) {
+                $body .= '<p style="margin: 4px 0;">🕐 <strong>' . esc_html(__('Time:', 'cheapalarms')) . '</strong> ' . esc_html($formattedTime) . '</p>';
+            }
+            if ($notes) {
+                $body .= '<p style="margin: 4px 0;">📝 <strong>' . esc_html(__('Notes:', 'cheapalarms')) . '</strong> ' . esc_html($notes) . '</p>';
+            }
+            $body .= '</div>';
+
+            // Get payment info if invoice exists
+            $meta = $this->getMeta($estimateId);
+            $invoice = $meta['invoice'] ?? null;
+            $invoiceUrl = null;
+            if ($invoice) {
+                // Check for new nested structure first
+                if (isset($invoice['ghl']['url'])) {
+                    $invoiceUrl = $invoice['ghl']['url'];
+                } elseif (isset($invoice['url'])) {
+                    $invoiceUrl = $invoice['url'];
+                }
+            }
+
+            if ($invoiceUrl) {
+                $body .= '<p>' . esc_html(__('Next step: Complete your payment to finalize everything.', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Complete Payment', 'cheapalarms')) . '</a></p>';
+            } else {
+                $body .= '<p>' . esc_html(__('You can complete your payment and view all details in your portal:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+            }
+
+            $body .= '<p>' . esc_html(__('If you need to reschedule or have any questions, please contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for booking email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Booking confirmation email sent via GHL', [
+                'estimateId' => $estimateId,
+                'contactId' => $contactId,
+                'sent' => $sent,
+                'scheduledDate' => $scheduledDate,
+                'scheduledTime' => $scheduledTime,
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail booking if email fails
+            $this->logger->error('Failed to send booking confirmation email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Send payment confirmation email to customer via GHL
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $payment Payment data
+     */
+    private function sendPaymentConfirmationEmail(string $estimateId, string $locationId, array $payment): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for payment email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for payment confirmation', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+            
+            // Format payment amount
+            $amount = $payment['amount'] ?? 0;
+            $currency = 'AUD';
+            $formattedAmount = number_format((float)$amount, 2);
+            
+            // Format payment date
+            $paidAt = $payment['paidAt'] ?? current_time('mysql');
+            $formattedDate = '';
+            if ($paidAt) {
+                try {
+                    $dateObj = new \DateTime($paidAt);
+                    $formattedDate = $dateObj->format('l, F j, Y \a\t g:i A'); // e.g., "Monday, December 3, 2024 at 2:30 PM"
+                } catch (\Exception $e) {
+                    $formattedDate = $paidAt;
+                }
+            }
+            
+            // Get booking details if available
+            $meta = $this->getMeta($estimateId);
+            $booking = $meta['booking'] ?? null;
+            $bookingDate = '';
+            if ($booking && isset($booking['scheduledDate'])) {
+                try {
+                    $dateObj = new \DateTime($booking['scheduledDate']);
+                    $bookingDate = $dateObj->format('l, F j, Y');
+                } catch (\Exception $e) {
+                    $bookingDate = $booking['scheduledDate'];
+                }
+            }
+
+            $subject = __('Payment confirmed - Thank you!', 'cheapalarms');
+            
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
+            
+            $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+            $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
+            $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+            if ($payment['transactionId'] ?? null) {
+                $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
+            }
+            if ($formattedDate) {
+                $body .= '<p style="margin: 4px 0;">✅ <strong>' . esc_html(__('Paid on:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+            }
+            $body .= '</div>';
+
+            if ($bookingDate) {
+                $body .= '<p>' . esc_html(sprintf(
+                    __('Your installation is confirmed for %s.', 'cheapalarms'),
+                    $bookingDate
+                )) . '</p>';
+            } else {
+                $body .= '<p>' . esc_html(__('Your installation is confirmed.', 'cheapalarms')) . '</p>';
+            }
+
+            $body .= '<p>' . esc_html(__('We\'ll be in touch soon with installation details and any final preparations needed.', 'cheapalarms')) . '</p>';
+            
+            $body .= '<p>' . esc_html(__('You can view all details and track progress in your portal:', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+
+            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for payment email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Payment confirmation email sent via GHL', [
+                'estimateId' => $estimateId,
+                'contactId' => $contactId,
+                'sent' => $sent,
+                'amount' => $amount,
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail payment if email fails
+            $this->logger->error('Failed to send payment confirmation email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Complete review for an estimate
+     * Transitions workflow from "reviewing" to "reviewed"
+     * Sends notification email to customer
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $options Additional options
+     * @return array|WP_Error
+     */
+    public function completeReview(string $estimateId, string $locationId = '', array $options = []): array|WP_Error
+    {
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        $meta = $this->getMeta($estimateId);
+        $workflow = $meta['workflow'] ?? [];
+        $currentStatus = $workflow['status'] ?? 'requested';
+
+        // Validate that estimate is in "reviewing" status
+        if ($currentStatus !== 'reviewing') {
+            return new WP_Error(
+                'invalid_status',
+                sprintf(
+                    __('Cannot complete review. Estimate is in "%s" status, expected "reviewing".', 'cheapalarms'),
+                    $currentStatus
+                ),
+                ['status' => 400, 'currentStatus' => $currentStatus]
+            );
+        }
+
+        // Validate that photos were submitted
+        $photos = $meta['photos'] ?? [];
+        if (($photos['submission_status'] ?? '') !== 'submitted') {
+            return new WP_Error(
+                'photos_not_submitted',
+                __('Cannot complete review. Photos must be submitted first.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+
+        // Transition workflow from "reviewing" to "reviewed"
+        $workflow['status'] = 'reviewed';
+        $workflow['currentStep'] = 2; // Still step 2 (Review step)
+        
+        // Update reviewedAt timestamp if not already set
+        if (empty($workflow['reviewedAt'])) {
+            $workflow['reviewedAt'] = current_time('mysql');
+        }
+        
+        // Preserve existing timestamps
+        if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+            $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+        }
+
+        // Update meta
+        $updateResult = $this->updateMeta($estimateId, [
+            'workflow' => $workflow,
+        ]);
+
+        if (!$updateResult) {
+            return new WP_Error(
+                'update_failed',
+                __('Failed to update workflow status.', 'cheapalarms'),
+                ['status' => 500]
+            );
+        }
+
+        $this->logger->info('Review completed successfully', [
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+            'reviewedAt' => $workflow['reviewedAt'],
+        ]);
+
+        // Send review completion email (non-blocking)
+        if ($locationId) {
+            $this->sendReviewCompletionEmail($estimateId, $locationId, $options);
+        }
+
+        return [
+            'ok' => true,
+            'workflow' => $workflow,
+            'reviewedAt' => $workflow['reviewedAt'],
+        ];
+    }
+
+    /**
+     * Send review completion email to customer
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array<string, mixed> $options Additional options
+     */
+    private function sendReviewCompletionEmail(string $estimateId, string $locationId, array $options = []): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for review completion email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for review completion email', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+
+            // Check if there's a revision (changes made during review)
+            $meta = $this->getMeta($estimateId);
+            $revision = $meta['revision'] ?? null;
+            $hasRevision = !empty($revision);
+
+            $subject = $hasRevision
+                ? __('Your estimate has been reviewed and updated', 'cheapalarms')
+                : __('Your estimate review is complete', 'cheapalarms');
+
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            
+            if ($hasRevision) {
+                // If revision exists, mention the update
+                $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos and updated your estimate accordingly.', 'cheapalarms')) . '</p>';
+                
+                // Show revision summary if available
+                $netChange = $revision['netChange'] ?? 0;
+                $isSavings = $netChange < 0;
+                
+                if ($isSavings) {
+                    $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+                    $body .= '<p style="margin: 0; font-size: 18px; font-weight: bold; color: #10b981;">' . esc_html(__('🎉 Great News!', 'cheapalarms')) . '</p>';
+                    $body .= '<p style="margin: 8px 0 0 0;">' . esc_html(sprintf(
+                        __('You save %s!', 'cheapalarms'),
+                        '$' . number_format(abs($netChange), 2)
+                    )) . '</p>';
+                    $body .= '</div>';
+                } else if ($netChange > 0) {
+                    $body .= '<div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0;">';
+                    $body .= '<p style="margin: 0;">' . esc_html(sprintf(
+                        __('Your estimate has been updated. Additional amount: %s', 'cheapalarms'),
+                        '$' . number_format($netChange, 2)
+                    )) . '</p>';
+                    $body .= '</div>';
+                }
+            } else {
+                // No changes made
+                $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos. Your estimate is ready for acceptance!', 'cheapalarms')) . '</p>';
+            }
+
+            $body .= '<p>' . esc_html(__('Next steps:', 'cheapalarms')) . '</p>';
+            $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+            $body .= '<li>' . esc_html(__('Review the updated estimate details', 'cheapalarms')) . '</li>';
+            $body .= '<li>' . esc_html(__('Accept the estimate when ready', 'cheapalarms')) . '</li>';
+            $body .= '<li>' . esc_html(__('Schedule your installation', 'cheapalarms')) . '</li>';
+            $body .= '</ul>';
+
+            $body .= '<p>' . esc_html(__('View your estimate and all details in your portal:', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View Updated Estimate', 'cheapalarms')) . '</a></p>';
+
+            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for review completion email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Review completion email sent via GHL', [
+                'estimateId' => $estimateId,
+                'contactId' => $contactId,
+                'sent' => $sent,
+                'hasRevision' => $hasRevision,
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail review completion if email fails
+            $this->logger->error('Failed to send review completion email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     private function attachEstimateToUser(int $userId, string $estimateId, ?string $locationId = null): void
     {
         $existing = get_user_meta($userId, 'ca_estimate_ids', true);
@@ -1937,29 +2689,83 @@ class PortalService
     }
 
     /**
+     * Auto-transition workflow from "reviewing" to "reviewed" if conditions are met
+     * Called after estimate update when revision data is provided
+     * 
+     * @param string $estimateId
+     * @return bool True if transition occurred, false otherwise
+     */
+    public function autoTransitionToReviewed(string $estimateId): bool
+    {
+        $meta = $this->getMeta($estimateId);
+        $workflow = $meta['workflow'] ?? [];
+        $photos = $meta['photos'] ?? [];
+        
+        // If workflow is "reviewing" and photos are submitted, transition to "reviewed"
+        if (($workflow['status'] ?? '') === 'reviewing' && 
+            ($photos['submission_status'] ?? '') === 'submitted') {
+            
+            $workflow['status'] = 'reviewed';
+            $workflow['currentStep'] = 2; // Still step 2 (Review step)
+            
+            // Update reviewedAt timestamp if not already set
+            if (empty($workflow['reviewedAt'])) {
+                $workflow['reviewedAt'] = current_time('mysql');
+            }
+            
+            // Preserve existing timestamps
+            if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+                $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+            }
+            
+            $result = $this->updateMeta($estimateId, ['workflow' => $workflow]);
+            
+            if ($result) {
+                $this->logger->info('Workflow auto-transitioned to reviewed after estimate update', [
+                    'estimateId' => $estimateId,
+                    'reviewedAt' => $workflow['reviewedAt'],
+                ]);
+            }
+            
+            return $result;
+        }
+        
+        return false;
+    }
+
+    /**
      * Send estimate revision notification to customer
      * Highlights savings or changes based on photo review
      * 
      * @param string $estimateId
      * @param string $locationId
      * @param array $revisionData
+     * @param array|null $estimateData Optional estimate data to avoid re-fetching
      * @return void
      */
-    public function sendRevisionNotification(string $estimateId, string $locationId, array $revisionData): void
+    public function sendRevisionNotification(string $estimateId, string $locationId, array $revisionData, ?array $estimateData = null): void
     {
         try {
-            // Get estimate to fetch contact details
-            $estimate = $this->estimateService->getEstimate([
-                'estimateId' => $estimateId,
-                'locationId' => $locationId,
-            ]);
-
-            if (is_wp_error($estimate)) {
-                $this->logger->warning('Could not fetch estimate for revision email', [
+            // Use provided estimate data if available, otherwise fetch (optimization)
+            if ($estimateData !== null && is_array($estimateData)) {
+                $estimate = $estimateData;
+                $this->logger->info('Using provided estimate data for revision notification', [
                     'estimateId' => $estimateId,
-                    'error' => $estimate->get_error_message(),
                 ]);
-                return;
+            } else {
+                // Get estimate to fetch contact details
+                $estimate = $this->estimateService->getEstimate([
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+
+                if (is_wp_error($estimate)) {
+                    $this->logger->warning('Could not fetch estimate for revision email', [
+                        'estimateId' => $estimateId,
+                        'error' => $estimate->get_error_message(),
+                    ]);
+                    return;
+                }
             }
 
             $contact = $estimate['contact'] ?? [];
@@ -1975,9 +2781,22 @@ class PortalService
             $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
             $portalUrl = $this->resolvePortalUrl($estimateId);
             
+            // Validate and sanitize numeric values (handle NaN/Infinity from frontend)
             $oldTotal = floatval($revisionData['oldTotal'] ?? 0);
             $newTotal = floatval($revisionData['newTotal'] ?? 0);
             $netChange = floatval($revisionData['netChange'] ?? 0);
+            
+            // Ensure values are finite (not NaN or Infinity)
+            if (!is_finite($oldTotal)) {
+                $oldTotal = 0.0;
+            }
+            if (!is_finite($newTotal)) {
+                $newTotal = 0.0;
+            }
+            if (!is_finite($netChange)) {
+                $netChange = 0.0;
+            }
+            
             $currency = $estimate['currency'] ?? 'AUD';
             $adminNote = sanitize_text_field($revisionData['adminNote'] ?? '');
             

@@ -120,6 +120,25 @@ class AdminEstimateController extends AdminController
                 ],
             ],
         ]);
+
+        register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)/complete-review', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->completeReview($request);
+            },
+            'args'                => [
+                'estimateId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
     }
 
     /**
@@ -136,6 +155,11 @@ class AdminEstimateController extends AdminController
         $search      = sanitize_text_field($request->get_param('search') ?? '');
         $status      = sanitize_text_field($request->get_param('status') ?? '');
         $portalStatus = sanitize_text_field($request->get_param('portalStatus') ?? '');
+        
+        // Validate workflow status filter against whitelist
+        $validWorkflowStatuses = ['requested', 'reviewing', 'reviewed', 'accepted', 'booked', 'paid', 'completed'];
+        $workflowStatusRaw = sanitize_text_field($request->get_param('workflowStatus') ?? '');
+        $workflowStatus = in_array($workflowStatusRaw, $validWorkflowStatuses, true) ? $workflowStatusRaw : '';
         $page        = max(1, (int)($request->get_param('page') ?? 1));
         $pageSize    = max(1, min(100, (int)($request->get_param('pageSize') ?? 20)));
 
@@ -166,12 +190,37 @@ class AdminEstimateController extends AdminController
             // Get portal meta from batch result (already fetched)
             $meta = $allMeta[$estimateId] ?? [];
             $portalStatusValue = $meta['quote']['status'] ?? 'sent';
+            
+            // Get workflow status safely (check if workflow is an array)
+            // Calculate once and reuse for both filtering and response
+            $workflow = $meta['workflow'] ?? [];
+            
+            // Derive workflow status for old estimates that don't have workflow block
+            if (empty($workflow) || !isset($workflow['status']) || !is_array($workflow)) {
+                $quoteStatus = $meta['quote']['status'] ?? 'sent';
+                $hasPhotos = !empty($meta['photos']['submission_status']) && $meta['photos']['submission_status'] === 'submitted';
+                
+                // Derive from existing data
+                if ($quoteStatus === 'accepted') {
+                    $workflowStatusValue = 'accepted';
+                } elseif ($hasPhotos && $quoteStatus === 'sent') {
+                    $workflowStatusValue = 'reviewing';
+                } else {
+                    $workflowStatusValue = 'requested';
+                }
+            } else {
+                $workflowStatusValue = $workflow['status'];
+            }
 
             // Apply filters
             if ($status && ($item['status'] ?? '') !== $status) {
                 continue;
             }
             if ($portalStatus && $portalStatusValue !== $portalStatus) {
+                continue;
+            }
+            // NEW: Filter by workflow status
+            if ($workflowStatus && $workflowStatusValue !== $workflowStatus) {
                 continue;
             }
             if ($search) {
@@ -197,9 +246,26 @@ class AdminEstimateController extends AdminController
                 $contactName = $contactEmail;
             }
 
-            // Get linked invoice from meta
-            $linkedInvoice = $meta['invoice'] ?? null;
+            // Get linked invoice from meta (support both old and new structure)
+            $invoice = $meta['invoice'] ?? null;
+            $linkedInvoice = null;
+            $linkedInvoiceId = null;
+            
+            if ($invoice) {
+                // Check for new structure first (ghl.xero), then fall back to old flat structure
+                if (isset($invoice['ghl']) && is_array($invoice['ghl'])) {
+                    $linkedInvoiceId = $invoice['ghl']['id'] ?? null;
+                } else {
+                    // Old flat structure
+                    $linkedInvoiceId = $invoice['id'] ?? null;
+                }
+                
+                if ($linkedInvoiceId) {
+                    $linkedInvoice = ['id' => $linkedInvoiceId];
+                }
+            }
 
+            // Reuse workflowStatusValue calculated above (no need to recalculate)
             $out[] = [
                 'id'             => $estimateId,
                 'estimateNumber' => $item['estimateNumber'] ?? null,
@@ -210,7 +276,8 @@ class AdminEstimateController extends AdminController
                 'currency'       => $currency,
                 'ghlStatus'      => $item['status'] ?? 'draft',
                 'portalStatus'   => $portalStatusValue,
-                'linkedInvoiceId' => $linkedInvoice['id'] ?? null,
+                'workflowStatus' => $workflowStatusValue, // Reuse value calculated above
+                'linkedInvoiceId' => ($linkedInvoice && isset($linkedInvoice['id'])) ? $linkedInvoice['id'] : null,
                 'createdAt'      => $item['createdAt'] ?? '',
                 'updatedAt'      => $item['updatedAt'] ?? '',
             ];
@@ -227,6 +294,11 @@ class AdminEstimateController extends AdminController
         foreach ($out as $item) {
             $status = $item['portalStatus'] ?? 'sent';
             $total = (float)($item['total'] ?? 0);
+            
+            // Validate and sanitize total (prevent overflow, negative, or NaN values)
+            if (!is_finite($total) || $total < 0) {
+                $total = 0.0; // Sanitize invalid values
+            }
             
             // Count by status
             if ($status === 'accepted') {
@@ -250,7 +322,7 @@ class AdminEstimateController extends AdminController
 
         // Apply pagination
         $total = count($out);
-        $offset = ($page - 1) * $pageSize;
+        $offset = max(0, ($page - 1) * $pageSize); // Ensure offset is non-negative
         $paginated = array_slice($out, $offset, $pageSize);
 
         return $this->respond([
@@ -290,13 +362,29 @@ class AdminEstimateController extends AdminController
 
         // Return linked invoice ID only (lazy loading - fetch details on demand)
         // This avoids blocking the estimate load with another slow GHL API call
-        $linkedInvoiceId = $meta['invoice']['id'] ?? null;
+        // Support both new structure (ghl.xero) and old flat structure for backward compatibility
+        $invoice = $meta['invoice'] ?? null;
+        $linkedInvoiceId = null;
+        $invoiceNumber = null;
+        
+        if ($invoice) {
+            // Check for new structure first (ghl.xero), then fall back to old flat structure
+            if (isset($invoice['ghl']) && is_array($invoice['ghl'])) {
+                $linkedInvoiceId = $invoice['ghl']['id'] ?? null;
+                $invoiceNumber = $invoice['ghl']['number'] ?? null;
+            } else {
+                // Old flat structure
+                $linkedInvoiceId = $invoice['id'] ?? null;
+                $invoiceNumber = $invoice['number'] ?? null;
+            }
+        }
+        
         $linkedInvoice = null;
         if ($linkedInvoiceId) {
             // Return minimal invoice info - full details can be fetched separately if needed
             $linkedInvoice = [
                 'id' => $linkedInvoiceId,
-                'invoiceNumber' => $meta['invoice']['number'] ?? null,
+                'invoiceNumber' => $invoiceNumber,
             ];
         }
 
@@ -328,6 +416,10 @@ class AdminEstimateController extends AdminController
                 'acceptedAt' => $meta['quote']['acceptedAt'] ?? null,
                 'photos'     => $meta['photos'] ?? null,
                 'invoice'    => $meta['invoice'] ?? null,
+                // NEW: Include workflow, booking, and payment data for admin visibility
+                'workflow'   => $meta['workflow'] ?? null,
+                'booking'    => $meta['booking'] ?? null,
+                'payment'    => $meta['payment'] ?? null,
             ],
             'linkedInvoice' => $linkedInvoice,
         ]);
@@ -406,10 +498,31 @@ class AdminEstimateController extends AdminController
         $body = $request->get_json_params();
         $options = $body ?? [];
         $revisionData = $options['revisionData'] ?? null;
+        $revisionNote = $options['revisionNote'] ?? null;
 
         // If revision data provided, send custom revision email instead of standard estimate
         if ($revisionData && is_array($revisionData)) {
-            $this->portalService->sendRevisionNotification($estimateId, $locationId, $revisionData);
+            // Merge revisionNote into revisionData if provided (for admin note in email)
+            if ($revisionNote && !isset($revisionData['adminNote'])) {
+                $revisionData['adminNote'] = sanitize_text_field($revisionNote);
+            }
+            
+            // Fetch estimate once and pass to sendRevisionNotification to avoid re-fetching
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+            
+            // Pass estimate data if available, otherwise let sendRevisionNotification fetch it
+            $estimateData = !is_wp_error($estimate) ? $estimate : null;
+            
+            // Send notification (non-blocking - errors are logged but don't fail the request)
+            try {
+                $this->portalService->sendRevisionNotification($estimateId, $locationId, $revisionData, $estimateData);
+            } catch (\Exception $e) {
+                // Log error but don't fail the request (email is non-critical)
+                error_log('Failed to send revision notification: ' . $e->getMessage());
+            }
             
             return $this->respond([
                 'ok' => true,
@@ -427,6 +540,33 @@ class AdminEstimateController extends AdminController
             'ok' => true,
             'message' => 'Estimate sent successfully',
         ]);
+    }
+
+    /**
+     * Complete review for an estimate
+     * Transitions workflow from "reviewing" to "reviewed"
+     */
+    public function completeReview(WP_REST_Request $request): WP_REST_Response
+    {
+        $estimateId = sanitize_text_field($request->get_param('estimateId'));
+        $locationId = sanitize_text_field($request->get_param('locationId') ?? '');
+
+        if (empty($estimateId)) {
+            return $this->respond(new WP_Error('missing_estimate_id', __('Estimate ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $options = [];
+        $body = $request->get_json_params();
+        if (is_array($body)) {
+            $options = $body;
+            if (isset($body['locationId']) && empty($locationId)) {
+                $locationId = sanitize_text_field($body['locationId']);
+            }
+        }
+
+        $result = $this->portalService->completeReview($estimateId, $locationId, $options);
+
+        return $this->respond($result);
     }
 
 }

@@ -185,9 +185,28 @@ class Authenticator
     private function encodeJwt(array $payload): string
     {
         $header  = ['alg' => 'HS256', 'typ' => 'JWT'];
+        
+        // Encode header and validate
+        $jsonHeader = wp_json_encode($header);
+        if ($jsonHeader === false) {
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Failed to encode JWT header JSON: ' . json_last_error_msg());
+            }
+            throw new \RuntimeException('Failed to encode JWT header: ' . json_last_error_msg());
+        }
+        
+        // Encode payload and validate
+        $jsonPayload = wp_json_encode($payload);
+        if ($jsonPayload === false) {
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Failed to encode JWT payload JSON: ' . json_last_error_msg());
+            }
+            throw new \RuntimeException('Failed to encode JWT payload: ' . json_last_error_msg());
+        }
+        
         $segments = [
-            $this->base64UrlEncode(wp_json_encode($header)),
-            $this->base64UrlEncode(wp_json_encode($payload)),
+            $this->base64UrlEncode($jsonHeader),
+            $this->base64UrlEncode($jsonPayload),
         ];
         $signature = hash_hmac('sha256', implode('.', $segments), $this->config->getJwtSecret(), true);
         $segments[] = $this->base64UrlEncode($signature);

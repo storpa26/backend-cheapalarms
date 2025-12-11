@@ -430,6 +430,105 @@ class PortalController implements ControllerInterface
                 ]);
             },
         ]);
+
+        register_rest_route('ca/v1', '/portal/book-job', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $payload     = $request->get_json_params();
+                $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId  = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
+
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
+                }
+
+                // Validate estimate access
+                $validationResult = $this->validateEstimateAccess($estimateId, $inviteToken);
+                if (is_wp_error($validationResult)) {
+                    return $this->respond($validationResult);
+                }
+
+                $bookingData = [
+                    'date' => sanitize_text_field($payload['date'] ?? ''),
+                    'time' => sanitize_text_field($payload['time'] ?? ''),
+                    'notes' => sanitize_text_field($payload['notes'] ?? ''),
+                ];
+
+                $result = $this->service->bookJob($estimateId, $locationId, $bookingData);
+                return $this->respond($result);
+            },
+        ]);
+
+        register_rest_route('ca/v1', '/portal/confirm-payment', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $payload     = $request->get_json_params();
+                $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId  = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
+
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
+                }
+
+                // Validate estimate access
+                $validationResult = $this->validateEstimateAccess($estimateId, $inviteToken);
+                if (is_wp_error($validationResult)) {
+                    return $this->respond($validationResult);
+                }
+
+                $paymentData = [
+                    'amount' => isset($payload['amount']) ? (float) $payload['amount'] : null,
+                    'provider' => sanitize_text_field($payload['provider'] ?? 'mock'),
+                    'transactionId' => sanitize_text_field($payload['transactionId'] ?? null),
+                ];
+
+                $result = $this->service->confirmPayment($estimateId, $locationId, $paymentData);
+                return $this->respond($result);
+            },
+        ]);
+    }
+
+    /**
+     * Universal helper to validate estimate access (authenticated user or valid invite token)
+     * 
+     * @param string $estimateId
+     * @param string $inviteToken
+     * @return true|WP_Error
+     */
+    private function validateEstimateAccess(string $estimateId, string $inviteToken = ''): bool|WP_Error
+    {
+        // Force refresh of current user so JWT filters can run
+        global $current_user;
+        $current_user = null;
+        $user = wp_get_current_user();
+
+        // If user is authenticated, allow access
+        if ($user && $user->ID > 0) {
+            return true;
+        }
+
+        // Fallback: check invite token if no authenticated user
+        if ($inviteToken) {
+            $validationResult = $this->service->validateInviteToken($estimateId, $inviteToken);
+            if ($validationResult['valid']) {
+                return true;
+            }
+            return new WP_Error(
+                'invalid_invite',
+                $validationResult['message'] ?: __('Invalid or expired invite token.', 'cheapalarms'),
+                ['status' => 403]
+            );
+        }
+
+        return new WP_Error(
+            'unauthorized',
+            __('Authentication required. Please log in or use a valid invite link.', 'cheapalarms'),
+            ['status' => 401]
+        );
     }
 
     /**

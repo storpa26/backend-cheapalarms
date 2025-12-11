@@ -41,7 +41,16 @@ class EstimatePhotoService
             return new WP_Error('bad_request', __('uploads[] required', 'cheapalarms'), ['status' => 400]);
         }
 
-        update_option('ca_estimate_uploads_' . $estimateId, wp_json_encode($data), false);
+        $encoded = wp_json_encode($data);
+        if ($encoded === false) {
+            $this->logger->error('Failed to encode photo mapping data JSON', [
+                'estimateId' => $estimateId,
+                'error' => json_last_error_msg(),
+            ]);
+            return new WP_Error('server_error', __('Failed to save photo mapping data.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        update_option('ca_estimate_uploads_' . $estimateId, $encoded, false);
 
         return ['ok' => true];
     }

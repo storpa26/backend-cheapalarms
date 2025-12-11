@@ -173,7 +173,14 @@ class UploadService
      */
     private function signToken(array $payload, string $secret): string
     {
-        $encodedPayload = $this->base64UrlEncode(wp_json_encode($payload));
+        $jsonPayload = wp_json_encode($payload);
+        if ($jsonPayload === false) {
+            $this->logger->error('Failed to encode token payload JSON', [
+                'error' => json_last_error_msg(),
+            ]);
+            throw new \RuntimeException('Failed to encode token payload: ' . json_last_error_msg());
+        }
+        $encodedPayload = $this->base64UrlEncode($jsonPayload);
         $signature      = $this->base64UrlEncode(hash_hmac('sha256', $encodedPayload, $secret, true));
         return $encodedPayload . '.' . $signature;
     }

@@ -240,6 +240,10 @@ class EstimateService
         $revisionData = $payload['revisionData'] ?? null;
         unset($payload['estimateId']);
         unset($payload['revisionData']); // Remove from GHL payload
+        
+        // Keep altId and altType in body - GHL PUT endpoint requires them in request body (same as POST)
+        $payload['altId'] = $altId;
+        $payload['altType'] = $altType;
 
         $existingTerms = (string)($payload['termsNotes'] ?? '');
         $payload['termsNotes'] = $this->ensurePhotoLinkInTerms($existingTerms, $estimateId);
@@ -257,9 +261,12 @@ class EstimateService
         }
 
         // Store revision data in portal meta if provided
-        if ($revisionData && is_array($revisionData)) {
+        if ($revisionData && is_array($revisionData) && !empty($revisionData)) {
             $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
             $portalService->storeRevisionData($estimateId, $revisionData);
+            
+            // Auto-transition workflow from "reviewing" to "reviewed" if conditions are met
+            $portalService->autoTransitionToReviewed($estimateId);
         }
 
         return ['ok' => true, 'result' => $response];
@@ -611,9 +618,28 @@ class EstimateService
         // Deep merge to preserve nested structures
         $merged = $this->deepMergeMeta($current, $changes);
         
-        $result = update_option('ca_portal_meta_' . $estimateId, wp_json_encode($merged), false);
+        // Encode to JSON and validate encoding succeeded
+        $currentJson = wp_json_encode($current);
+        $mergedJson = wp_json_encode($merged);
         
-        if (!$result) {
+        // Validate JSON encoding succeeded (wp_json_encode returns false on failure)
+        if ($currentJson === false || $mergedJson === false) {
+            $this->logger->error('Failed to encode portal meta JSON', [
+                'estimateId' => $estimateId,
+                'currentError' => json_last_error_msg(),
+                'mergedError' => json_last_error_msg(),
+            ]);
+            return false;
+        }
+        
+        // Check if value actually changed (update_option returns false if no change)
+        $valueChanged = ($currentJson !== $mergedJson);
+        
+        $result = update_option('ca_portal_meta_' . $estimateId, $mergedJson, false);
+        
+        // Only log warning if value changed but update failed
+        // update_option() returns false when value hasn't changed, which is normal
+        if (!$result && $valueChanged) {
             $this->logger->warning('Failed to update portal meta after sending estimate', [
                 'estimateId' => $estimateId,
                 'changes' => array_keys($changes),
@@ -733,7 +759,16 @@ class EstimateService
             return new WP_Error('bad_request', __('uploads[] required', 'cheapalarms'), ['status' => 400]);
         }
 
-        update_option('ca_estimate_uploads_' . $estimateId, wp_json_encode($data), false);
+        $encoded = wp_json_encode($data);
+        if ($encoded === false) {
+            $this->logger->error('Failed to encode upload data JSON', [
+                'estimateId' => $estimateId,
+                'error' => json_last_error_msg(),
+            ]);
+            return new WP_Error('server_error', __('Failed to save upload data.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        update_option('ca_estimate_uploads_' . $estimateId, $encoded, false);
 
         return ['ok' => true];
     }

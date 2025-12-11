@@ -418,7 +418,19 @@ class EstimateController implements ControllerInterface
                     // Update stored data if any attachments were removed
                     if ($needsUpdate && count($validUploads) !== count($data['uploads'])) {
                         $data['uploads'] = $validUploads;
-                        update_option('ca_estimate_uploads_' . $estimateId, wp_json_encode($data), false);
+                        $encoded = wp_json_encode($data);
+                        if ($encoded === false) {
+                            // Log error but don't fail the request (data is already cleaned up)
+                            if (function_exists('error_log')) {
+                                error_log(sprintf(
+                                    '[CheapAlarms] Failed to encode upload data JSON for estimate %s: %s',
+                                    $estimateId,
+                                    json_last_error_msg()
+                                ));
+                            }
+                        } else {
+                            update_option('ca_estimate_uploads_' . $estimateId, $encoded, false);
+                        }
                     }
                     
                     return new WP_REST_Response([

@@ -86,9 +86,20 @@ class JobLinkService
             'metadata' => is_array($metadata) ? $metadata : [],
         ];
 
+        // Encode JSON and validate
+        $encoded = wp_json_encode($linkData);
+        if ($encoded === false) {
+            $this->logger->error('Failed to encode job link data JSON', [
+                'estimateId' => $estimateId,
+                'jobUuid' => $jobUuid,
+                'error' => json_last_error_msg(),
+            ]);
+            return false;
+        }
+
         // Store bidirectional links
-        update_option(self::OPTION_PREFIX_ESTIMATE . $estimateId, wp_json_encode($linkData), false);
-        update_option(self::OPTION_PREFIX_JOB . $jobUuid, wp_json_encode($linkData), false);
+        update_option(self::OPTION_PREFIX_ESTIMATE . $estimateId, $encoded, false);
+        update_option(self::OPTION_PREFIX_JOB . $jobUuid, $encoded, false);
 
         // Update master index
         $this->updateIndex($estimateId, $jobUuid, $linkData);
