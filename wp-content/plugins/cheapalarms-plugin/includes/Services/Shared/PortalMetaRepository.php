@@ -41,7 +41,19 @@ class PortalMetaRepository
      */
     public function update(string $estimateId, array $meta): bool
     {
-        return update_option('ca_portal_meta_' . $estimateId, json_encode($meta));
+        $encoded = json_encode($meta);
+        if ($encoded === false) {
+            // Log JSON encoding errors for debugging
+            if (function_exists('error_log')) {
+                error_log(sprintf(
+                    '[CheapAlarms] Failed to encode portal meta for estimate %s: %s',
+                    $estimateId,
+                    json_last_error_msg()
+                ));
+            }
+            return false;
+        }
+        return update_option('ca_portal_meta_' . $estimateId, $encoded);
     }
 
     /**
