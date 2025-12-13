@@ -339,6 +339,11 @@ class QuoteRequestController implements ControllerInterface
                     'statusLabel' => 'Sent',
                     'total' => null, // Will be populated when estimate is fetched
                 ],
+                'workflow' => [
+                    'status' => 'requested',
+                    'currentStep' => 1,
+                    'requestedAt' => current_time('mysql'),
+                ],
             ];
 
             // Attach estimate to user if user exists
