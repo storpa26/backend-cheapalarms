@@ -255,6 +255,7 @@ class PortalService
             'workflow'     => $meta['workflow'] ?? null, // Include workflow data for customer portal
             'booking'     => $meta['booking'] ?? null, // Include booking data for customer portal
             'payment'     => $meta['payment'] ?? null, // Include payment data for customer portal
+            'revision'     => $meta['revision'] ?? null, // Include revision data for customer portal
             'isGuestMode'  => $isGuestMode,
             'daysRemaining' => $daysRemaining,
             'canCreateAccount' => $isGuestMode, // Guests can always create account
