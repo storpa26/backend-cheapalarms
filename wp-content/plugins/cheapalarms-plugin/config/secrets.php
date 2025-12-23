@@ -50,5 +50,13 @@ return [
     // Get this from your GHL account settings or API
     // This is required for the send estimate endpoint
     'ghl_user_id'      => '', // TODO: Add your GHL authorized employee/user ID here
+    
+    // Xero Integration Credentials
+    'xero_client_id'     => 'F5DB8DECFE374A4DA3A7748C332FC79D',
+    'xero_client_secret' => 'bxweNJyFI0wav6U01hSTzOaqXKGZesDf8NcdU7z49TbCnVKa',
+    // Redirect URI should match your Next.js app URL + /xero/callback
+    // This must be the Next.js frontend URL, not the WordPress URL
+    // Using page route instead of API route for better OAuth callback handling
+    'xero_redirect_uri'  => 'https://headless-cheapalarms.vercel.app/xero/callback',
 ];
 

@@ -193,6 +193,10 @@ class Plugin
             $this->container->get(Logger::class),
             $this->container->get(\CheapAlarms\Plugin\Services\Estimate\EstimateNormalizer::class)
         ));
+        $this->container->set(\CheapAlarms\Plugin\Services\XeroService::class, fn () => new \CheapAlarms\Plugin\Services\XeroService(
+            $this->container->get(Config::class),
+            $this->container->get(Logger::class)
+        ));
     }
 
     private function registerRestEndpoints(): void

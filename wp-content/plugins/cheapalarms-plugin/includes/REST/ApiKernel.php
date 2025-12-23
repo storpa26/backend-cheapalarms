@@ -14,6 +14,7 @@ use CheapAlarms\Plugin\REST\Controllers\UsersController;
 use CheapAlarms\Plugin\REST\Controllers\AdminEstimateController;
 use CheapAlarms\Plugin\REST\Controllers\AdminInvoiceController;
 use CheapAlarms\Plugin\REST\Controllers\QuoteRequestController;
+use CheapAlarms\Plugin\REST\Controllers\XeroController;
 use CheapAlarms\Plugin\Services\Container;
 
 class ApiKernel
@@ -37,6 +38,7 @@ class ApiKernel
             new AdminEstimateController($this->container),
             new AdminInvoiceController($this->container),
             new QuoteRequestController($this->container),
+            new XeroController($this->container),
         ];
 
         foreach ($controllers as $controller) {

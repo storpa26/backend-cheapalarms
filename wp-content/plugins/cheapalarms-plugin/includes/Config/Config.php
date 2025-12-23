@@ -17,6 +17,11 @@ class Config
         'api_allowed_origins'    => [],
         'jwt_secret'             => '',
         'jwt_ttl_seconds'        => 3600,
+        'xero_client_id'         => '',
+        'xero_client_secret'     => '',
+        'xero_redirect_uri'      => '',
+        'xero_sales_account_code' => '200',
+        'xero_bank_account_code' => '090',
     ];
 
     private array $overrides = [];
@@ -173,6 +178,31 @@ class Config
         }
         
         return null;
+    }
+
+    public function getXeroClientId(): string
+    {
+        return $this->fromOverrides('xero_client_id') ?: $this->getEnv('CA_XERO_CLIENT_ID', $this->defaults['xero_client_id']);
+    }
+
+    public function getXeroClientSecret(): string
+    {
+        return $this->fromOverrides('xero_client_secret') ?: $this->getEnv('CA_XERO_CLIENT_SECRET', $this->defaults['xero_client_secret']);
+    }
+
+    public function getXeroRedirectUri(): string
+    {
+        return $this->fromOverrides('xero_redirect_uri') ?: $this->getEnv('CA_XERO_REDIRECT_URI', $this->defaults['xero_redirect_uri']);
+    }
+
+    public function getXeroSalesAccountCode(): string
+    {
+        return $this->fromOverrides('xero_sales_account_code') ?: $this->getEnv('CA_XERO_SALES_ACCOUNT_CODE', $this->defaults['xero_sales_account_code']);
+    }
+
+    public function getXeroBankAccountCode(): string
+    {
+        return $this->fromOverrides('xero_bank_account_code') ?: $this->getEnv('CA_XERO_BANK_ACCOUNT_CODE', $this->defaults['xero_bank_account_code']);
     }
 
     private function getEnv(string $key, $default = '')
