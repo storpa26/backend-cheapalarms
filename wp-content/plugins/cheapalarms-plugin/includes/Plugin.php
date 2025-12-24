@@ -197,6 +197,10 @@ class Plugin
             $this->container->get(Config::class),
             $this->container->get(Logger::class)
         ));
+        $this->container->set(\CheapAlarms\Plugin\Services\StripeService::class, fn () => new \CheapAlarms\Plugin\Services\StripeService(
+            $this->container->get(Config::class),
+            $this->container->get(Logger::class)
+        ));
     }
 
     private function registerRestEndpoints(): void

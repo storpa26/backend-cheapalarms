@@ -40,7 +40,7 @@ class XeroService
     /**
      * Get Xero OAuth authorization URL
      * 
-     * @return string|WP_Error
+     * @return array|WP_Error Returns array with 'ok', 'authUrl', and 'state' keys, or WP_Error on failure
      */
     public function getAuthorizationUrl()
     {
@@ -713,6 +713,11 @@ class XeroService
         // or in secrets.php as 'xero_sales_account_code'
         $salesAccountCode = $this->config->getXeroSalesAccountCode();
         
+        // Validate sales account code
+        if (empty($salesAccountCode)) {
+            return new WP_Error('missing_sales_account', __('Sales account code is not configured.', 'cheapalarms'), ['status' => 500]);
+        }
+        
         foreach ($items as $item) {
             $unitAmount = (float)($item['amount'] ?? $item['unitAmount'] ?? 0);
             $quantity = (float)($item['qty'] ?? $item['quantity'] ?? 1);
@@ -889,6 +894,8 @@ class XeroService
         // Note: CurrencyCode is intentionally omitted - Xero will automatically use
         // the organization's base currency. Setting a currency that the organization
         // is not subscribed to will cause a validation error.
+        // LineAmountTypes: 'Exclusive' means tax is added on top, 'Inclusive' means tax is included
+        // We use 'Exclusive' to match our TaxType logic (EXCLUSIVE for line items)
         $xeroInvoice = [
             'Type' => 'ACCREC', // Accounts Receivable
             'Contact' => [
@@ -899,6 +906,7 @@ class XeroService
             'InvoiceNumber' => $invoiceNumber,
             'Reference' => 'GHL Invoice: ' . ($ghlInvoice['id'] ?? ''),
             'LineItems' => $lineItems,
+            'LineAmountTypes' => 'Exclusive', // Required by Xero API - matches TaxType logic
             'Status' => $invoiceStatus, // DRAFT, SUBMITTED, AUTHORISED, PAID, or VOIDED
             // CurrencyCode omitted - Xero uses organization's base currency
         ];
