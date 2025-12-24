@@ -9,6 +9,7 @@ wordpress/readme.html
 # Environment-specific config (commit a sample instead)
 wordpress/wp-config.php
 *.local.php
+**/secrets.php
 
 # Runtime uploads/cache
 wordpress/wp-content/uploads/
