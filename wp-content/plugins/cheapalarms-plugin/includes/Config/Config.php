@@ -22,6 +22,8 @@ class Config
         'xero_redirect_uri'      => '',
         'xero_sales_account_code' => '200',
         'xero_bank_account_code' => '090',
+        'stripe_publishable_key' => '',
+        'stripe_secret_key'      => '',
     ];
 
     private array $overrides = [];
@@ -203,6 +205,16 @@ class Config
     public function getXeroBankAccountCode(): string
     {
         return $this->fromOverrides('xero_bank_account_code') ?: $this->getEnv('CA_XERO_BANK_ACCOUNT_CODE', $this->defaults['xero_bank_account_code']);
+    }
+
+    public function getStripePublishableKey(): string
+    {
+        return $this->fromOverrides('stripe_publishable_key') ?: $this->getEnv('CA_STRIPE_PUBLISHABLE_KEY', $this->defaults['stripe_publishable_key']);
+    }
+
+    public function getStripeSecretKey(): string
+    {
+        return $this->fromOverrides('stripe_secret_key') ?: $this->getEnv('CA_STRIPE_SECRET_KEY', $this->defaults['stripe_secret_key']);
     }
 
     private function getEnv(string $key, $default = '')

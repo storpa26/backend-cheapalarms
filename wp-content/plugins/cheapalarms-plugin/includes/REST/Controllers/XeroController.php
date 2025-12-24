@@ -16,12 +16,14 @@ class XeroController extends AdminController
 {
     private XeroService $xeroService;
     private Authenticator $auth;
+    private \CheapAlarms\Plugin\Services\Logger $logger;
 
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->xeroService = $this->container->get(XeroService::class);
         $this->auth = $this->container->get(Authenticator::class);
+        $this->logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
     }
 
     public function register(): void
@@ -232,6 +234,29 @@ class XeroController extends AdminController
 
         if (is_wp_error($result)) {
             return $this->respond($result);
+        }
+
+        // Store Xero invoice ID in portal meta (find estimate ID from invoice ID)
+        $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+        $estimateId = $portalMetaRepo->findEstimateIdByInvoiceId($invoiceId);
+        
+        if ($estimateId) {
+            $meta = $portalMetaRepo->get($estimateId);
+            $invoiceMeta = $meta['invoice'] ?? [];
+            $invoiceMeta['xeroInvoiceId'] = $result['invoiceId'];
+            $invoiceMeta['xeroInvoiceNumber'] = $result['invoiceNumber'];
+            $portalMetaRepo->merge($estimateId, ['invoice' => $invoiceMeta]);
+            
+            $this->logger->info('Stored Xero invoice ID in portal meta', [
+                'estimateId' => $estimateId,
+                'invoiceId' => $invoiceId,
+                'xeroInvoiceId' => $result['invoiceId'],
+            ]);
+        } else {
+            $this->logger->warning('Could not find estimate ID for invoice, Xero invoice ID not stored', [
+                'invoiceId' => $invoiceId,
+                'xeroInvoiceId' => $result['invoiceId'],
+            ]);
         }
 
         return $this->respond([

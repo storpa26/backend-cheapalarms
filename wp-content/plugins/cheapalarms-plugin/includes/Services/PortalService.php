@@ -1097,6 +1097,49 @@ class PortalService
             'amount' => $amount,
         ]);
 
+        // Record payment in Xero if invoice was synced to Xero
+        $invoice = $meta['invoice'] ?? null;
+        $xeroInvoiceId = $invoice['xeroInvoiceId'] ?? null;
+        
+        if ($xeroInvoiceId) {
+            $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+            
+            // Check if Xero is connected
+            if ($xeroService->isConnected()) {
+                $paymentMethod = $payment['provider'] === 'stripe' ? 'Stripe' : ($payment['provider'] ?? 'Manual');
+                $transactionId = $payment['transactionId'] ?? '';
+                
+                $xeroPaymentResult = $xeroService->recordPayment(
+                    $xeroInvoiceId,
+                    $amount,
+                    $paymentMethod,
+                    $transactionId
+                );
+                
+                if (is_wp_error($xeroPaymentResult)) {
+                    // Log error but don't fail the payment confirmation
+                    $this->logger->error('Failed to record payment in Xero', [
+                        'estimateId' => $estimateId,
+                        'xeroInvoiceId' => $xeroInvoiceId,
+                        'amount' => $amount,
+                        'error' => $xeroPaymentResult->get_error_message(),
+                    ]);
+                } else {
+                    $this->logger->info('Payment recorded in Xero', [
+                        'estimateId' => $estimateId,
+                        'xeroInvoiceId' => $xeroInvoiceId,
+                        'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
+                        'amount' => $amount,
+                    ]);
+                }
+            } else {
+                $this->logger->warning('Xero invoice ID exists but Xero is not connected', [
+                    'estimateId' => $estimateId,
+                    'xeroInvoiceId' => $xeroInvoiceId,
+                ]);
+            }
+        }
+
         // Send payment confirmation email (non-blocking)
         if ($locationId) {
             $this->sendPaymentConfirmationEmail($estimateId, $locationId, $payment);
