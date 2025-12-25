@@ -11,6 +11,7 @@ use WP_REST_Request;
 use WP_REST_Response;
 
 use function sanitize_text_field;
+use function current_time;
 
 class XeroController extends AdminController
 {
@@ -245,9 +246,17 @@ class XeroController extends AdminController
             $invoiceMeta = $meta['invoice'] ?? [];
             $invoiceMeta['xeroInvoiceId'] = $result['invoiceId'];
             $invoiceMeta['xeroInvoiceNumber'] = $result['invoiceNumber'];
+            // Update sync status for manual sync
+            $invoiceMeta['xeroSync'] = [
+                'status' => 'success',
+                'attemptedAt' => current_time('mysql'),
+                'error' => null,
+                'retryCount' => ($invoiceMeta['xeroSync']['retryCount'] ?? 0),
+                'note' => 'Manually synced via admin',
+            ];
             $portalMetaRepo->merge($estimateId, ['invoice' => $invoiceMeta]);
             
-            $this->logger->info('Stored Xero invoice ID in portal meta', [
+            $this->logger->info('Stored Xero invoice ID in portal meta (manual sync)', [
                 'estimateId' => $estimateId,
                 'invoiceId' => $invoiceId,
                 'xeroInvoiceId' => $result['invoiceId'],

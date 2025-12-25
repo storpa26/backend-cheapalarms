@@ -29,6 +29,9 @@ use function wp_create_user;
 use function wp_generate_password;
 use function wp_mail;
 use function wp_update_user;
+use function get_transient;
+use function set_transient;
+use function delete_transient;
 
 class PortalService
 {
@@ -897,6 +900,11 @@ class PortalService
         }
 
         $this->updateMeta($estimateId, ['invoice' => $invoice]);
+
+        // Auto-sync invoice to Xero if connected (non-blocking)
+        if (!empty($invoice['id']) && $resolvedLocation) {
+            $this->syncInvoiceToXero($estimateId, $invoice['id'], $resolvedLocation);
+        }
 
         // Update GHL note with invoice information (non-blocking)
         if (!empty($invoice['id']) && $resolvedLocation) {
@@ -2027,6 +2035,251 @@ class PortalService
                 'estimateId' => $estimateId,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Auto-sync invoice to Xero (non-blocking)
+     * Called automatically when GHL invoice is created
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $ghlInvoiceId GHL invoice ID
+     * @param string $locationId Location ID
+     * @return void
+     */
+    private function syncInvoiceToXero(string $estimateId, string $ghlInvoiceId, string $locationId): void
+    {
+        // Use lock to prevent concurrent sync attempts
+        $lockKey = 'ca_xero_sync_lock_' . $estimateId;
+        $lockValue = get_transient($lockKey);
+        
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 30 seconds)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 30) {
+                delete_transient($lockKey);
+                $this->logger->warning('Cleared stale Xero sync lock', [
+                    'estimateId' => $estimateId,
+                    'lockAge' => $lockAge,
+                ]);
+            } else {
+                // Sync already in progress, skip
+                $this->logger->info('Xero sync already in progress, skipping', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+        }
+        
+        // Set lock
+        set_transient($lockKey, time(), 30);
+        
+        try {
+            // Get current meta
+            $meta = $this->getMeta($estimateId);
+            $invoiceMeta = $meta['invoice'] ?? [];
+            
+            // Check if already synced successfully
+            $xeroSync = $invoiceMeta['xeroSync'] ?? [];
+            if (($xeroSync['status'] ?? '') === 'success' && !empty($invoiceMeta['xeroInvoiceId'])) {
+                $this->logger->info('Invoice already synced to Xero, skipping auto-sync', [
+                    'estimateId' => $estimateId,
+                    'xeroInvoiceId' => $invoiceMeta['xeroInvoiceId'],
+                ]);
+                delete_transient($lockKey);
+                return;
+            }
+            
+            // Check if Xero is connected
+            $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+            if (!$xeroService->isConnected()) {
+                // Update status to 'skipped' - Xero not connected
+                $invoiceMeta['xeroSync'] = [
+                    'status' => 'skipped',
+                    'attemptedAt' => current_time('mysql'),
+                    'error' => 'Xero not connected',
+                ];
+                $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                
+                $this->logger->info('Xero auto-sync skipped: Xero not connected', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                ]);
+                delete_transient($lockKey);
+                return;
+            }
+            
+            // Check if account codes are configured
+            $salesAccountCode = $this->config->getXeroSalesAccountCode();
+            if (empty($salesAccountCode)) {
+                $invoiceMeta['xeroSync'] = [
+                    'status' => 'failed',
+                    'attemptedAt' => current_time('mysql'),
+                    'error' => 'Sales account code not configured',
+                    'retryCount' => ($xeroSync['retryCount'] ?? 0),
+                ];
+                $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                
+                $this->logger->error('Xero auto-sync failed: Sales account code not configured', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                ]);
+                delete_transient($lockKey);
+                return;
+            }
+            
+            // Update status to 'pending'
+            $invoiceMeta['xeroSync'] = [
+                'status' => 'pending',
+                'attemptedAt' => current_time('mysql'),
+                'retryCount' => ($xeroSync['retryCount'] ?? 0),
+            ];
+            $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+            
+            $this->logger->info('Xero auto-sync started', [
+                'estimateId' => $estimateId,
+                'ghlInvoiceId' => $ghlInvoiceId,
+            ]);
+            
+            // Fetch invoice from GHL
+            $invoiceService = $this->container->get(\CheapAlarms\Plugin\Services\InvoiceService::class);
+            $ghlInvoice = $invoiceService->getInvoice($ghlInvoiceId, $locationId);
+            
+            if (is_wp_error($ghlInvoice)) {
+                $errorMessage = $ghlInvoice->get_error_message();
+                $invoiceMeta['xeroSync'] = [
+                    'status' => 'failed',
+                    'attemptedAt' => current_time('mysql'),
+                    'error' => 'Failed to fetch invoice from GHL: ' . $errorMessage,
+                    'retryCount' => ($xeroSync['retryCount'] ?? 0) + 1,
+                ];
+                $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                
+                $this->logger->error('Xero auto-sync failed: Could not fetch invoice from GHL', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                    'error' => $errorMessage,
+                ]);
+                delete_transient($lockKey);
+                return;
+            }
+            
+            // Extract contact data
+            $contact = $ghlInvoice['contact'] ?? [];
+            $contactName = trim($contact['name'] ?? '');
+            
+            // Split name into first and last name
+            $firstName = '';
+            $lastName = '';
+            if (!empty($contactName)) {
+                $nameParts = preg_split('/\s+/', $contactName, 2);
+                $firstName = $nameParts[0] ?? '';
+                $lastName = $nameParts[1] ?? '';
+            }
+            
+            $contactData = [
+                'name' => $contactName ?: 'Unknown',
+                'email' => $contact['email'] ?? '',
+                'firstName' => $firstName,
+                'lastName' => $lastName,
+                'phone' => $contact['phone'] ?? '',
+            ];
+            
+            // Create invoice in Xero
+            $xeroResult = $xeroService->createInvoice($ghlInvoice, $contactData);
+            
+            if (is_wp_error($xeroResult)) {
+                $errorMessage = $xeroResult->get_error_message();
+                $errorCode = $xeroResult->get_error_code();
+                
+                // Handle duplicate invoice - try to retrieve existing invoice ID
+                if ($errorCode === 'duplicate_invoice') {
+                    $errorData = $xeroResult->get_error_data();
+                    $existingXeroInvoiceId = $errorData['xeroInvoiceId'] ?? null;
+                    
+                    if ($existingXeroInvoiceId) {
+                        // Store existing invoice ID
+                        $invoiceMeta['xeroInvoiceId'] = $existingXeroInvoiceId;
+                        $invoiceMeta['xeroInvoiceNumber'] = $errorData['invoiceNumber'] ?? null;
+                        $invoiceMeta['xeroSync'] = [
+                            'status' => 'success',
+                            'attemptedAt' => current_time('mysql'),
+                            'error' => null,
+                            'retryCount' => ($xeroSync['retryCount'] ?? 0),
+                            'note' => 'Invoice already existed in Xero, using existing invoice',
+                        ];
+                        $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                        
+                        $this->logger->info('Xero auto-sync succeeded: Using existing invoice', [
+                            'estimateId' => $estimateId,
+                            'ghlInvoiceId' => $ghlInvoiceId,
+                            'xeroInvoiceId' => $existingXeroInvoiceId,
+                        ]);
+                        delete_transient($lockKey);
+                        return;
+                    }
+                }
+                
+                // Store error
+                $invoiceMeta['xeroSync'] = [
+                    'status' => 'failed',
+                    'attemptedAt' => current_time('mysql'),
+                    'error' => $errorMessage,
+                    'retryCount' => ($xeroSync['retryCount'] ?? 0) + 1,
+                ];
+                $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                
+                $this->logger->error('Xero auto-sync failed', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                    'error' => $errorMessage,
+                    'errorCode' => $errorCode,
+                ]);
+                delete_transient($lockKey);
+                return;
+            }
+            
+            // Success - store Xero invoice ID
+            $invoiceMeta['xeroInvoiceId'] = $xeroResult['invoiceId'];
+            $invoiceMeta['xeroInvoiceNumber'] = $xeroResult['invoiceNumber'];
+            $invoiceMeta['xeroSync'] = [
+                'status' => 'success',
+                'attemptedAt' => current_time('mysql'),
+                'error' => null,
+                'retryCount' => ($xeroSync['retryCount'] ?? 0),
+            ];
+            $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+            
+            $this->logger->info('Xero auto-sync succeeded', [
+                'estimateId' => $estimateId,
+                'ghlInvoiceId' => $ghlInvoiceId,
+                'xeroInvoiceId' => $xeroResult['invoiceId'],
+                'xeroInvoiceNumber' => $xeroResult['invoiceNumber'],
+            ]);
+            
+        } catch (\Exception $e) {
+            // Catch any unexpected errors
+            $meta = $this->getMeta($estimateId);
+            $invoiceMeta = $meta['invoice'] ?? [];
+            $xeroSync = $invoiceMeta['xeroSync'] ?? [];
+            
+            $invoiceMeta['xeroSync'] = [
+                'status' => 'failed',
+                'attemptedAt' => current_time('mysql'),
+                'error' => 'Unexpected error: ' . $e->getMessage(),
+                'retryCount' => ($xeroSync['retryCount'] ?? 0) + 1,
+            ];
+            $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+            
+            $this->logger->error('Xero auto-sync failed with exception', [
+                'estimateId' => $estimateId,
+                'ghlInvoiceId' => $ghlInvoiceId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        } finally {
+            // Always release lock
+            delete_transient($lockKey);
         }
     }
 

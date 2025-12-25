@@ -958,6 +958,37 @@ class XeroService
             return new WP_Error('invoice_not_found', __('Invoice not found in Xero.', 'cheapalarms'), ['status' => 404]);
         }
 
+        // Check if invoice is DRAFT - Xero requires AUTHORISED status for payments
+        $currentStatus = $invoice['Status'] ?? '';
+        if ($currentStatus === 'DRAFT') {
+            // Update invoice to AUTHORISED before recording payment
+            $updateResult = $this->makeRequest('POST', '/Invoices/' . $invoiceId, [
+                'Invoices' => [[
+                    'InvoiceID' => $invoiceId,
+                    'Status' => 'AUTHORISED',
+                ]]
+            ]);
+            
+            if (is_wp_error($updateResult)) {
+                $this->logger->error('Failed to authorize invoice before payment', [
+                    'invoiceId' => $invoiceId,
+                    'error' => $updateResult->get_error_message(),
+                ]);
+                return new WP_Error('invoice_authorization_failed', __('Failed to authorize invoice. Please authorize it manually in Xero.', 'cheapalarms'), ['status' => 500]);
+            }
+            
+            $this->logger->info('Invoice authorized before payment', [
+                'invoiceId' => $invoiceId,
+            ]);
+            
+            // Refresh invoice data after status update
+            $invoiceResult = $this->makeRequest('GET', '/Invoices/' . $invoiceId);
+            if (is_wp_error($invoiceResult)) {
+                return $invoiceResult;
+            }
+            $invoice = $invoiceResult['Invoices'][0] ?? null;
+        }
+
         // Validate payment amount
         $total = (float)($invoice['Total'] ?? 0);
         $amountPaid = (float)($invoice['AmountPaid'] ?? 0);
@@ -1020,6 +1051,30 @@ class XeroService
         $paymentRecord = $result['Payments'][0] ?? null;
         if (!$paymentRecord) {
             return new WP_Error('payment_creation_failed', __('Failed to record payment in Xero.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        // After successful payment, check if invoice should be marked as PAID
+        $newAmountPaid = $amountPaid + $amount;
+        if (abs($newAmountPaid - $total) < 0.01) {
+            // Payment covers full amount, update status to PAID
+            $paidUpdateResult = $this->makeRequest('POST', '/Invoices/' . $invoiceId, [
+                'Invoices' => [[
+                    'InvoiceID' => $invoiceId,
+                    'Status' => 'PAID',
+                ]]
+            ]);
+            
+            // Don't fail if status update fails - payment is already recorded
+            if (is_wp_error($paidUpdateResult)) {
+                $this->logger->warning('Payment recorded but failed to update invoice status to PAID', [
+                    'invoiceId' => $invoiceId,
+                    'error' => $paidUpdateResult->get_error_message(),
+                ]);
+            } else {
+                $this->logger->info('Invoice status updated to PAID after full payment', [
+                    'invoiceId' => $invoiceId,
+                ]);
+            }
         }
 
         $this->logger->info('Payment recorded in Xero', [
