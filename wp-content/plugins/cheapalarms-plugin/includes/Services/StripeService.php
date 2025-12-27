@@ -96,7 +96,6 @@ class StripeService
             $this->logger->error('Stripe payment intent creation failed', [
                 'status' => $statusCode,
                 'error' => $errorMessage,
-                'response' => $data,
             ]);
             return new WP_Error('stripe_api_error', $errorMessage, [
                 'status' => $statusCode,
@@ -104,11 +103,13 @@ class StripeService
             ]);
         }
 
-        $this->logger->info('Stripe payment intent created', [
-            'payment_intent_id' => $data['id'] ?? null,
-            'amount' => $amount,
-            'currency' => $currency,
-        ]);
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->logger->info('Stripe payment intent created', [
+                'payment_intent_id' => $data['id'] ?? null,
+                'amount' => $amount,
+                'currency' => $currency,
+            ]);
+        }
 
         return [
             'ok' => true,
@@ -148,11 +149,13 @@ class StripeService
             ]);
         }
 
-        $this->logger->info('Stripe payment intent verified', [
-            'payment_intent_id' => $paymentIntentId,
-            'status' => $status,
-            'amount' => $result['amount'] ?? 0,
-        ]);
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->logger->info('Stripe payment intent verified', [
+                'payment_intent_id' => $paymentIntentId,
+                'status' => $status,
+                'amount' => $result['amount'] ?? 0,
+            ]);
+        }
 
         return $result;
     }
@@ -180,8 +183,9 @@ class StripeService
 
         if (is_wp_error($response)) {
             $this->logger->error('Stripe get payment intent request failed', [
-                'payment_intent_id' => $paymentIntentId,
                 'error' => $response->get_error_message(),
+                // Only include IDs in debug
+                ...(defined('WP_DEBUG') && WP_DEBUG ? ['payment_intent_id' => $paymentIntentId] : []),
             ]);
             return $response;
         }
@@ -204,9 +208,9 @@ class StripeService
         if ($statusCode !== 200) {
             $errorMessage = $data['error']['message'] ?? 'Unknown Stripe API error';
             $this->logger->error('Stripe get payment intent failed', [
-                'payment_intent_id' => $paymentIntentId,
                 'status' => $statusCode,
                 'error' => $errorMessage,
+                ...(defined('WP_DEBUG') && WP_DEBUG ? ['payment_intent_id' => $paymentIntentId] : []),
             ]);
             return new WP_Error('stripe_api_error', $errorMessage, [
                 'status' => $statusCode,
@@ -221,6 +225,95 @@ class StripeService
             'amount' => ($data['amount'] ?? 0) / 100,
             'currency' => $data['currency'] ?? 'aud',
             'metadata' => $data['metadata'] ?? [],
+        ];
+    }
+
+    /**
+     * Refund a payment intent (full refund)
+     *
+     * @param string $paymentIntentId Payment intent ID
+     * @param string $reason Optional refund reason
+     * @param float|null $amount Optional amount to refund (in standard units, defaults to full)
+     * @return array|WP_Error
+     */
+    public function refundPaymentIntent(string $paymentIntentId, string $reason = 'requested_by_customer', ?float $amount = null)
+    {
+        $secretKey = $this->config->getStripeSecretKey();
+
+        if (empty($secretKey)) {
+            return new WP_Error('stripe_not_configured', __('Stripe secret key is not configured.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        $bodyParams = [
+            'payment_intent' => $paymentIntentId,
+            'reason' => $reason,
+        ];
+
+        if ($amount !== null) {
+            $amountInCents = (int) round($amount * 100);
+            if ($amountInCents > 0) {
+                $bodyParams['amount'] = $amountInCents;
+            }
+        }
+
+        $response = wp_remote_post(self::STRIPE_API_BASE . '/refunds', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $secretKey,
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ],
+            'body' => http_build_query($bodyParams),
+            'timeout' => 30,
+        ]);
+
+        if (is_wp_error($response)) {
+            $this->logger->error('Stripe refund request failed', [
+                'error' => $response->get_error_message(),
+                ...(defined('WP_DEBUG') && WP_DEBUG ? ['payment_intent_id' => $paymentIntentId] : []),
+            ]);
+            return $response;
+        }
+
+        $statusCode = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
+            $this->logger->error('Failed to decode Stripe refund response', [
+                'status' => $statusCode,
+                'json_error' => json_last_error_msg(),
+                ...(defined('WP_DEBUG') && WP_DEBUG ? ['payment_intent_id' => $paymentIntentId] : []),
+            ]);
+            return new WP_Error('stripe_parse_error', __('Invalid response from Stripe API.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        if ($statusCode !== 200) {
+            $errorMessage = $data['error']['message'] ?? 'Unknown Stripe API error';
+            $this->logger->error('Stripe refund failed', [
+                'status' => $statusCode,
+                'error' => $errorMessage,
+                ...(defined('WP_DEBUG') && WP_DEBUG ? ['payment_intent_id' => $paymentIntentId] : []),
+            ]);
+            return new WP_Error('stripe_api_error', $errorMessage, [
+                'status' => $statusCode,
+                'data' => $data,
+            ]);
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->logger->info('Stripe refund processed', [
+                'payment_intent_id' => $paymentIntentId,
+                'amount_refunded' => ($data['amount'] ?? 0) / 100,
+                'currency' => $data['currency'] ?? 'aud',
+                'status' => $data['status'] ?? 'unknown',
+            ]);
+        }
+
+        return [
+            'ok' => true,
+            'refundId' => $data['id'] ?? null,
+            'status' => $data['status'] ?? 'unknown',
+            'amount' => ($data['amount'] ?? 0) / 100,
+            'currency' => $data['currency'] ?? 'aud',
         ];
     }
 }

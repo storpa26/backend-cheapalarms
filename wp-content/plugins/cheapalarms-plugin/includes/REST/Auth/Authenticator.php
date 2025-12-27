@@ -110,10 +110,25 @@ class Authenticator
         ];
     }
 
+    /**
+     * Enforce rate limiting with user-based and IP-based tracking
+     * SECURITY: Uses both user ID (if authenticated) and IP address to prevent bypass
+     * 
+     * @param string $key Rate limit key (e.g., 'auth_token', 'password_reset')
+     * @param int $limit Maximum requests per window
+     * @param int $windowSeconds Time window in seconds
+     * @return bool|WP_Error
+     */
     public function enforceRateLimit(string $key, int $limit = 5, int $windowSeconds = 300): bool|WP_Error
     {
         $origin = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        $bucket = 'ca_rate_' . md5($key . $origin);
+        
+        // SECURITY: Use user ID if authenticated, otherwise IP address
+        // This prevents IP rotation attacks and reduces false positives from shared IPs
+        $userId = get_current_user_id();
+        $identifier = $userId > 0 ? "user_{$userId}" : "ip_{$origin}";
+        
+        $bucket = 'ca_rate_' . md5($key . $identifier);
         $record = get_transient($bucket);
         $now    = time();
 

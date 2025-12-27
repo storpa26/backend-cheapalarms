@@ -7,6 +7,7 @@ use CheapAlarms\Plugin\Services\GhlClient;
 use CheapAlarms\Plugin\Services\EstimateService;
 use CheapAlarms\Plugin\Services\PortalService;
 use CheapAlarms\Plugin\Config\Config;
+use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_Error;
@@ -52,6 +53,7 @@ class QuoteRequestController implements ControllerInterface
     private PortalService $portalService;
     private Config $config;
     private Container $container;
+    private Authenticator $authenticator;
 
     public function __construct(Container $container)
     {
@@ -60,6 +62,7 @@ class QuoteRequestController implements ControllerInterface
         $this->estimateService = $container->get(EstimateService::class);
         $this->portalService = $container->get(PortalService::class);
         $this->config = $container->get(Config::class);
+        $this->authenticator = $container->get(Authenticator::class);
     }
 
     public function register(): void
@@ -76,6 +79,12 @@ class QuoteRequestController implements ControllerInterface
      */
     public function handleQuoteRequest(WP_REST_Request $request): WP_REST_Response
     {
+        // Rate limit public quote requests to prevent abuse
+        $rateCheck = $this->authenticator->enforceRateLimit('quote_request_public');
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+
         $body = $request->get_json_params();
 
         // Validate required fields
@@ -278,15 +287,16 @@ class QuoteRequestController implements ControllerInterface
             }
 
             // Step 3: Create portal entry and send invitation
-            // Generate invite token
-            $inviteToken = bin2hex(random_bytes(16));
+            // SECURITY: Generate invite token and hash it before storage
+            $inviteToken = \CheapAlarms\Plugin\Services\PortalService::generateToken();
+            $inviteTokenHash = \CheapAlarms\Plugin\Services\PortalService::hashInviteToken($inviteToken);
             
             // Use frontend URL (Next.js on Vercel) instead of WordPress backend URL
             $frontendUrl = $this->config->getFrontendUrl();
             $portalUrl = add_query_arg(
                 [
                     'estimateId' => $estimateId,
-                    'inviteToken' => $inviteToken,
+                    'inviteToken' => $inviteToken, // Plaintext token in URL
                 ],
                 trailingslashit($frontendUrl) . 'portal'
             );
@@ -323,7 +333,7 @@ class QuoteRequestController implements ControllerInterface
             // Build portal meta (will be saved after password reset generation)
             $portalMeta = [
                 'account' => [
-                    'inviteToken' => $inviteToken,
+                    'inviteToken' => $inviteTokenHash, // Store hash, not plaintext
                     'portalUrl' => $portalUrl,
                     'status' => 'pending',
                     'statusLabel' => 'Invite sent',

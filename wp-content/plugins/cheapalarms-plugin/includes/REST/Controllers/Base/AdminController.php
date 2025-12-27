@@ -103,15 +103,21 @@ abstract class AdminController implements ControllerInterface
         if (is_wp_error($result)) {
             $status = $result->get_error_data()['status'] ?? 500;
             $errorData = $result->get_error_data();
-            return new WP_REST_Response([
+            $response = [
                 'ok'   => false,
                 'error' => $result->get_error_message(), // Standardized to 'error' instead of 'err'
                 'code' => $result->get_error_code(),
                 // Include 'err' for backward compatibility
                 'err'  => $result->get_error_message(),
-                // Include error details if available
-                'details' => $errorData['details'] ?? null,
-            ], $status);
+            ];
+            
+            // SECURITY: Only include detailed error information in debug mode
+            // In production, avoid leaking internal system details
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $response['details'] = $errorData['details'] ?? null;
+            }
+            
+            return new WP_REST_Response($response, $status);
         }
 
         if (!isset($result['ok'])) {

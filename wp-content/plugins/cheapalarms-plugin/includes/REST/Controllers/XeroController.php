@@ -50,14 +50,10 @@ class XeroController extends AdminController
         register_rest_route('ca/v1', '/xero/callback', [
             'methods' => 'POST',
             'permission_callback' => function () {
-                // Verify request is from our frontend
-                $frontendUrl = $this->container->get(\CheapAlarms\Plugin\Config\Config::class)->getFrontendUrl();
-                $referer = $_SERVER['HTTP_REFERER'] ?? '';
-                $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-                
-                // Allow if referer or origin matches frontend URL, or if state token is valid (CSRF protection)
-                // The state token validation in handleCallback provides additional security
-                return true; // State token validation is the primary security mechanism
+                // SECURITY: State token validation in handleCallback is the primary security mechanism
+                // Referer/Origin headers are spoofable and not used for security decisions
+                // This endpoint is called server-to-server from Next.js during OAuth flow
+                return true;
             },
             'callback' => function (WP_REST_Request $request) {
                 return $this->handleCallback($request);
@@ -124,38 +120,29 @@ class XeroController extends AdminController
 
     private function handleCallback(WP_REST_Request $request): WP_REST_Response
     {
-        // Additional security: Verify request source
-        $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
-        $frontendUrl = $config->getFrontendUrl();
-        $referer = sanitize_text_field($_SERVER['HTTP_REFERER'] ?? '');
-        $origin = sanitize_text_field($_SERVER['HTTP_ORIGIN'] ?? '');
-        
-        // Check if request comes from our frontend (optional but recommended)
-        $isValidSource = false;
-        if (!empty($frontendUrl)) {
-            $frontendHost = parse_url($frontendUrl, PHP_URL_HOST);
-            $refererHost = parse_url($referer, PHP_URL_HOST);
-            $originHost = parse_url($origin, PHP_URL_HOST);
-            
-            $isValidSource = ($refererHost === $frontendHost) || ($originHost === $frontendHost);
-        }
+        // SECURITY: State token validation is the primary security mechanism
+        // Referer/Origin headers are spoofable and should not be relied upon for security
+        // We log them for monitoring but don't block based on them
         
         // Get parameters from JSON body (POST request)
         $body = $request->get_json_params();
         $code = sanitize_text_field($body['code'] ?? '');
         $state = sanitize_text_field($body['state'] ?? '');
-
+        
         if (empty($code) || empty($state)) {
             return $this->respond(new WP_Error('missing_params', __('Code and state are required.', 'cheapalarms'), ['status' => 400]));
         }
         
-        // Log suspicious requests (but don't block - state token validation is primary security)
-        if (!$isValidSource && !empty($referer)) {
-            $this->container->get(\CheapAlarms\Plugin\Services\Logger::class)->warning('Xero callback from unexpected source', [
-                'referer' => $referer,
-                'origin' => $origin,
-                'expected' => $frontendUrl,
-            ]);
+        // Optional: Log referer/origin for monitoring (but don't use for security decisions)
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $referer = sanitize_text_field($_SERVER['HTTP_REFERER'] ?? '');
+            $origin = sanitize_text_field($_SERVER['HTTP_ORIGIN'] ?? '');
+            if (!empty($referer) || !empty($origin)) {
+                $this->container->get(\CheapAlarms\Plugin\Services\Logger::class)->info('Xero OAuth callback', [
+                    'has_referer' => !empty($referer),
+                    'has_origin' => !empty($origin),
+                ]);
+            }
         }
 
         $result = $this->xeroService->exchangeCodeForToken($code, $state);

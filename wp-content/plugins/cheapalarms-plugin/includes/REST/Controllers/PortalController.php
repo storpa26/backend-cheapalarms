@@ -30,6 +30,46 @@ class PortalController implements ControllerInterface
 
     public function register(): void
     {
+        $allowPortalOrInvite = function (WP_REST_Request $request) {
+            // Allow if inviteToken is present (handled in callback with validateInviteToken)
+            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? $request->get_json_params()['inviteToken'] ?? '');
+            if (!empty($inviteToken)) {
+                return true;
+            }
+            // Otherwise require portal or admin capability
+            $this->auth->ensureUserLoaded();
+            $portalCheck = $this->auth->requireCapability('ca_access_portal');
+            if (!is_wp_error($portalCheck)) {
+                return true;
+            }
+            $adminCheck = $this->auth->requireCapability('ca_manage_portal');
+            return is_wp_error($adminCheck) ? $portalCheck : true;
+        };
+
+        $requireCsrf = function (WP_REST_Request $request) {
+            // Basic CSRF check for cookie-auth POSTs: require X-WP-Nonce header when no inviteToken is used
+            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? $request->get_json_params()['inviteToken'] ?? '');
+            if (!empty($inviteToken)) {
+                return true; // invite links act as bearer tokens
+            }
+            $nonce = $request->get_header('x-wp-nonce');
+            if (empty($nonce)) {
+                return $this->respond(new WP_Error(
+                    'missing_csrf_token',
+                    __('Missing CSRF token.', 'cheapalarms'),
+                    ['status' => 403]
+                ));
+            }
+            if (!wp_verify_nonce($nonce, 'wp_rest')) {
+                return $this->respond(new WP_Error(
+                    'invalid_csrf_token',
+                    __('Invalid CSRF token.', 'cheapalarms'),
+                    ['status' => 403]
+                ));
+            }
+            return true;
+        };
+
         register_rest_route('ca/v1', '/portal/status', [
             'methods'             => 'GET',
             'permission_callback' => function () {
@@ -171,7 +211,7 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/accept', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload    = $request->get_json_params();
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
@@ -182,7 +222,6 @@ class PortalController implements ControllerInterface
                 if (empty($estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
-                
                 if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
                 }
@@ -199,6 +238,13 @@ class PortalController implements ControllerInterface
                     ));
                 }
                 
+                // SECURITY: Verify user has access to this estimate before allowing acceptance
+                // This prevents IDOR - users can only accept estimates they have access to
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status); // Returns 403 if not authorized
+                }
+                
                 $result = $this->service->acceptEstimate($estimateId, $locationId);
                 return $this->respond($result);
             },
@@ -206,7 +252,7 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/create-invoice', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload     = $request->get_json_params();
                 $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
@@ -218,7 +264,6 @@ class PortalController implements ControllerInterface
                 if (empty($estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
-                
                 if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
                 }
@@ -253,7 +298,7 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/reject', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload    = $request->get_json_params();
                 $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
@@ -280,6 +325,13 @@ class PortalController implements ControllerInterface
                         __('Please create an account to reject this estimate. Guest access is read-only.', 'cheapalarms'),
                         ['status' => 403, 'requiresAccount' => true]
                     ));
+                }
+                
+                // SECURITY: Verify user has access to this estimate before allowing rejection
+                // This prevents IDOR - users can only reject estimates they have access to
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status); // Will return 403 if not authorized
                 }
                 
                 $result = $this->service->rejectEstimate($estimateId, $locationId, $reason);
@@ -376,7 +428,7 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/submit-photos', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload     = $request->get_json_params();
                 $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
@@ -433,7 +485,7 @@ class PortalController implements ControllerInterface
 
         register_rest_route('ca/v1', '/portal/book-job', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload     = $request->get_json_params();
                 $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
@@ -443,11 +495,17 @@ class PortalController implements ControllerInterface
                 if (empty($estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
 
-                // Validate estimate access
-                $validationResult = $this->validateEstimateAccess($estimateId, $inviteToken);
-                if (is_wp_error($validationResult)) {
-                    return $this->respond($validationResult);
+                // Validate estimate access (includes locationId validation via getStatus)
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status); // Will return 403 if not authorized or invalid locationId
                 }
 
                 $bookingData = [
@@ -456,14 +514,23 @@ class PortalController implements ControllerInterface
                     'notes' => sanitize_text_field($payload['notes'] ?? ''),
                 ];
 
-                $result = $this->service->bookJob($estimateId, $locationId, $bookingData);
+                // Use validated locationId from status (getStatus always returns locationId)
+                $effectiveLocationId = $status['locationId'] ?? null;
+                if (empty($effectiveLocationId)) {
+                    return $this->respond(new WP_Error(
+                        'missing_location_id',
+                        __('Location ID could not be determined for this estimate.', 'cheapalarms'),
+                        ['status' => 400]
+                    ));
+                }
+                $result = $this->service->bookJob($estimateId, $effectiveLocationId, $bookingData);
                 return $this->respond($result);
             },
         ]);
 
         register_rest_route('ca/v1', '/portal/confirm-payment', [
             'methods'             => 'POST',
-            'permission_callback' => fn () => true,
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
             'callback'            => function (WP_REST_Request $request) {
                 $payload     = $request->get_json_params();
                 $estimateId  = sanitize_text_field($payload['estimateId'] ?? '');
@@ -473,11 +540,17 @@ class PortalController implements ControllerInterface
                 if (empty($estimateId)) {
                     return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
                 }
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
 
-                // Validate estimate access
-                $validationResult = $this->validateEstimateAccess($estimateId, $inviteToken);
-                if (is_wp_error($validationResult)) {
-                    return $this->respond($validationResult);
+                // Validate estimate access (includes locationId validation via getStatus)
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status); // Will return 403 if not authorized or invalid locationId
                 }
 
                 $paymentData = [
@@ -486,7 +559,16 @@ class PortalController implements ControllerInterface
                     'transactionId' => sanitize_text_field($payload['transactionId'] ?? null),
                 ];
 
-                $result = $this->service->confirmPayment($estimateId, $locationId, $paymentData);
+                // Use validated locationId from status (getStatus always returns locationId)
+                $effectiveLocationId = $status['locationId'] ?? null;
+                if (empty($effectiveLocationId)) {
+                    return $this->respond(new WP_Error(
+                        'missing_location_id',
+                        __('Location ID could not be determined for this estimate.', 'cheapalarms'),
+                        ['status' => 400]
+                    ));
+                }
+                $result = $this->service->confirmPayment($estimateId, $effectiveLocationId, $paymentData);
                 return $this->respond($result);
             },
         ]);

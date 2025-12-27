@@ -78,6 +78,12 @@ class PasswordResetController implements ControllerInterface
      */
     public function sendPasswordReset(WP_REST_Request $request): WP_REST_Response
     {
+        // SECURITY: Rate limit password reset requests to prevent brute force and account enumeration
+        $rateCheck = $this->authenticator->enforceRateLimit('password_reset', 5, 300);
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+        
         $payload = $this->getJsonPayload($request);
 
         $email = sanitize_email($payload['email'] ?? '');
@@ -190,6 +196,12 @@ class PasswordResetController implements ControllerInterface
      */
     public function validateResetKey(WP_REST_Request $request): WP_REST_Response
     {
+        // SECURITY: Rate limit reset key validation to prevent brute force
+        $rateCheck = $this->authenticator->enforceRateLimit('validate_reset_key', 10, 300);
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+        
         $payload = $this->getJsonPayload($request);
 
         $key = sanitize_text_field($payload['key'] ?? '');
@@ -228,9 +240,16 @@ class PasswordResetController implements ControllerInterface
 
     /**
      * Check if account exists
+     * SECURITY: Rate limited and returns generic response to prevent account enumeration
      */
     public function checkAccount(WP_REST_Request $request): WP_REST_Response
     {
+        // SECURITY: Rate limit to prevent account enumeration attacks
+        $rateCheck = $this->authenticator->enforceRateLimit('check_account', 10, 300);
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+        
         $payload = $this->getJsonPayload($request);
 
         $email = sanitize_email($payload['email'] ?? '');
@@ -245,15 +264,12 @@ class PasswordResetController implements ControllerInterface
         $userId = email_exists($email);
         $user = $userId ? get_user_by('id', $userId) : null;
 
+        // SECURITY: Return generic response regardless of account existence to prevent enumeration
+        // Always return success with minimal information
         return new WP_REST_Response([
             'ok' => true,
-            'accountExists' => (bool) $userId,
-            'email' => $email,
-            'user' => $user ? [
-                'id' => $user->ID,
-                'email' => $user->user_email,
-                'login' => $user->user_login,
-            ] : null,
+            'message' => __('If an account exists, a password reset link will be sent.', 'cheapalarms'),
+            // Do not reveal account existence status
         ], 200);
     }
 
@@ -262,6 +278,12 @@ class PasswordResetController implements ControllerInterface
      */
     public function resetPassword(WP_REST_Request $request): WP_REST_Response
     {
+        // SECURITY: Rate limit password reset attempts to prevent brute force
+        $rateCheck = $this->authenticator->enforceRateLimit('reset_password', 5, 300);
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+        
         $payload = $this->getJsonPayload($request);
 
         $key = sanitize_text_field($payload['key'] ?? '');
@@ -750,8 +772,9 @@ class PasswordResetController implements ControllerInterface
                 'code' => $result->get_error_code(),
             ];
             
-            // Include GHL error details if available
-            if (!empty($errorData['body'])) {
+            // SECURITY: Only include detailed error information in debug mode
+            // In production, avoid leaking internal system details
+            if (defined('WP_DEBUG') && WP_DEBUG && !empty($errorData['body'])) {
                 $body = is_string($errorData['body']) ? json_decode($errorData['body'], true) : $errorData['body'];
                 if (is_array($body)) {
                     $response['details'] = $body;

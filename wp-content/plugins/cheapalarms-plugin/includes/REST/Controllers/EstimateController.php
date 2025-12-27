@@ -64,8 +64,9 @@ class EstimateController implements ControllerInterface
                     return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                 }
                 
-                // Allow admins
-                if ($this->auth->requireCapability('ca_view_estimates')) {
+                // Allow admins (SECURITY: Check for WP_Error, not just truthy value)
+                $adminCheck = $this->auth->requireCapability('ca_view_estimates');
+                if (!is_wp_error($adminCheck)) {
                     $result = $this->service->getEstimate($request->get_params());
                     return $this->respond($result, $request);
                 }

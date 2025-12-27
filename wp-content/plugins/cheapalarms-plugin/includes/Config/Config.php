@@ -72,17 +72,17 @@ class Config
     {
         $override = $this->fromOverrides('upload_allowed_origins');
         if (is_array($override) && !empty($override)) {
-            return $override;
+            return $this->sanitizeOrigins($override);
         }
 
         $value = $this->getEnv('CA_UPLOAD_ALLOWED_ORIGINS', '');
         if (is_array($value)) {
-            return $value;
+            return $this->sanitizeOrigins($value);
         }
         if (is_string($value) && $value !== '') {
-            return array_map('trim', explode(',', $value));
+            return $this->sanitizeOrigins(array_map('trim', explode(',', $value)));
         }
-        return [site_url()];
+        return $this->sanitizeOrigins([site_url()]);
     }
 
     /**
@@ -92,17 +92,17 @@ class Config
     {
         $override = $this->fromOverrides('api_allowed_origins');
         if (is_array($override) && !empty($override)) {
-            return $override;
+            return $this->sanitizeOrigins($override);
         }
 
         $value = $this->getEnv('CA_API_ALLOWED_ORIGINS', '');
         if (is_array($value)) {
-            return $value;
+            return $this->sanitizeOrigins($value);
         }
         if (is_string($value) && $value !== '') {
-            return array_map('trim', explode(',', $value));
+            return $this->sanitizeOrigins(array_map('trim', explode(',', $value)));
         }
-        return [site_url()];
+        return $this->sanitizeOrigins([site_url()]);
     }
 
     public function getJwtSecret(): string
@@ -234,6 +234,40 @@ class Config
     private function fromOverrides(string $key)
     {
         return $this->overrides[$key] ?? null;
+    }
+
+    /**
+     * Sanitize and normalize allowed origins:
+     * - Trim entries
+     * - Remove empties and duplicates
+     * - Drop localhost/loopback in production unless explicitly allowed
+     */
+    private function sanitizeOrigins(array $origins): array
+    {
+        $clean = [];
+        foreach ($origins as $origin) {
+            if (!is_string($origin)) {
+                continue;
+            }
+            $o = trim($origin);
+            if ($o === '') {
+                continue;
+            }
+            $clean[] = $o;
+        }
+
+        $clean = array_values(array_unique($clean));
+
+        $allowLocalhost = $this->getEnv('CA_ALLOW_LOCALHOST_CORS', false);
+        $isProd = defined('WP_DEBUG') ? !WP_DEBUG : true;
+
+        if ($isProd && !$allowLocalhost) {
+            $clean = array_values(array_filter($clean, function ($o) {
+                return !str_contains($o, 'localhost') && !str_contains($o, '127.0.0.1');
+            }));
+        }
+
+        return $clean;
     }
 }
 

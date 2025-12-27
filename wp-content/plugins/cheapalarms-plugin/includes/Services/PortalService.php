@@ -74,9 +74,48 @@ class PortalService
         ];
     }
 
-    private function generateToken(): string
+    /**
+     * Generate a cryptographically secure invite token
+     * SECURITY: Tokens are hashed before storage (see hashInviteToken)
+     * 
+     * @return string Plaintext token (will be hashed before storage)
+     */
+    public static function generateToken(): string
     {
         return wp_generate_password(48, false, false);
+    }
+    
+    /**
+     * Hash an invite token for secure storage
+     * SECURITY: Uses password_hash (bcrypt) to prevent token disclosure if database is compromised
+     * 
+     * @param string $token Plaintext token
+     * @return string Hashed token
+     */
+    public static function hashInviteToken(string $token): string
+    {
+        return password_hash($token, PASSWORD_DEFAULT);
+    }
+    
+    /**
+     * Verify an invite token against a stored hash
+     * SECURITY: Supports both hashed (new) and plaintext (legacy) tokens for backward compatibility
+     * 
+     * @param string $providedToken Token provided by user
+     * @param string $storedToken Stored token (may be hash or plaintext)
+     * @return bool True if token matches
+     */
+    public static function verifyInviteToken(string $providedToken, string $storedToken): bool
+    {
+        // Check if stored token is a password hash (starts with $2y$, $2a$, etc.)
+        if (preg_match('/^\$2[ayb]\$/', $storedToken)) {
+            // New format: hashed token - use password_verify
+            return password_verify($providedToken, $storedToken);
+        }
+        
+        // Legacy format: plaintext token - use hash_equals for timing-safe comparison
+        // After successful verification, we should upgrade to hash (but don't do it here to avoid side effects)
+        return hash_equals($storedToken, $providedToken);
     }
 
     private function resolvePortalUrl(string $estimateId, ?string $token = null): string
@@ -968,6 +1007,16 @@ class PortalService
         if (!$timestamp) {
             return new WP_Error('bad_request', __('Invalid date/time format', 'cheapalarms'), ['status' => 400]);
         }
+        
+        // SECURITY: Prevent booking in the past
+        $currentTimestamp = current_time('timestamp');
+        if ($timestamp < $currentTimestamp) {
+            return new WP_Error(
+                'invalid_date',
+                __('Booking date cannot be in the past. Please select a future date.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
 
         // Update booking data
         $booking = [
@@ -1034,130 +1083,412 @@ class PortalService
             return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
         }
 
-        $locationId = $locationId ?: $this->config->getLocationId();
-        $meta = $this->getMeta($estimateId);
-        
-        // Validate estimate is booked
-        $workflowStatus = $meta['workflow']['status'] ?? 'requested';
-        if ($workflowStatus !== 'booked') {
-            return new WP_Error(
-                'invalid_status',
-                __('Estimate must be booked before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
-                ['status' => 400]
-            );
-        }
-
-        // Get payment amount (from payment data or calculate from invoice)
-        $amount = isset($paymentData['amount']) ? (float) $paymentData['amount'] : null;
-        if ($amount === null) {
-            // Try to get from invoice
-            $invoice = $meta['invoice'] ?? null;
-            if ($invoice && isset($invoice['ghl']['total'])) {
-                $amount = (float) $invoice['ghl']['total'];
-            } elseif ($invoice && isset($invoice['total'])) {
-                $amount = (float) $invoice['total'];
+        // SECURITY: Use lock to prevent race conditions during payment confirmation
+        $lockKey = 'ca_payment_lock_' . $estimateId;
+        $lockValue = get_transient($lockKey);
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 10 seconds - previous process likely crashed)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 10) {
+                // Lock is stale - clear it and proceed
+                delete_transient($lockKey);
+                $this->logger->warning('Cleared stale payment confirmation lock', [
+                    'estimateId' => $estimateId,
+                    'lockAge' => $lockAge,
+                ]);
             } else {
-                return new WP_Error('bad_request', __('Payment amount is required', 'cheapalarms'), ['status' => 400]);
+                // Lock is active - another request is processing
+                // Check if payment was already confirmed
+                $meta = $this->getMeta($estimateId);
+                $existingPayment = $meta['payment'] ?? null;
+                if (!empty($existingPayment['status']) && $existingPayment['status'] === 'paid') {
+                    return [
+                        'ok' => true,
+                        'payment' => $existingPayment,
+                        'alreadyPaid' => true,
+                    ];
+                }
+                // If not paid yet, return error to prevent duplicate processing
+                return new WP_Error(
+                    'processing',
+                    __('Another request is currently processing this payment. Please wait a moment and try again.', 'cheapalarms'),
+                    ['status' => 409]
+                );
             }
         }
-
-        if ($amount <= 0) {
-            return new WP_Error('bad_request', __('Payment amount must be greater than zero', 'cheapalarms'), ['status' => 400]);
-        }
-
-        // Update payment data
-        $payment = [
-            'amount' => $amount,
-            'status' => 'paid',
-            'provider' => sanitize_text_field($paymentData['provider'] ?? 'mock'),
-            'transactionId' => sanitize_text_field($paymentData['transactionId'] ?? null),
-            'paidAt' => current_time('mysql'),
-        ];
-
-        // Update workflow status to "paid"
-        $workflow = $meta['workflow'] ?? [];
-        $workflow['status'] = 'paid';
-        $workflow['currentStep'] = 5;
-        $workflow['paidAt'] = current_time('mysql');
         
-        // Preserve existing timestamps
-        if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
-            $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
-        }
-        if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
-            $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
-        }
-        if (!isset($workflow['acceptedAt']) && isset($meta['workflow']['acceptedAt'])) {
-            $workflow['acceptedAt'] = $meta['workflow']['acceptedAt'];
-        }
-        if (!isset($workflow['bookedAt']) && isset($meta['workflow']['bookedAt'])) {
-            $workflow['bookedAt'] = $meta['workflow']['bookedAt'];
-        }
+        // Set lock with timestamp
+        set_transient($lockKey, time(), 10);
 
-        // Update meta
-        $this->updateMeta($estimateId, [
-            'payment' => $payment,
-            'workflow' => $workflow,
-        ]);
-
-        $this->logger->info('Payment confirmed successfully', [
-            'estimateId' => $estimateId,
-            'amount' => $amount,
-        ]);
-
-        // Record payment in Xero if invoice was synced to Xero
-        $invoice = $meta['invoice'] ?? null;
-        $xeroInvoiceId = $invoice['xeroInvoiceId'] ?? null;
-        
-        if ($xeroInvoiceId) {
-            $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+        try {
+            $locationId = $locationId ?: $this->config->getLocationId();
+            $meta = $this->getMeta($estimateId);
             
-            // Check if Xero is connected
-            if ($xeroService->isConnected()) {
-                $paymentMethod = $payment['provider'] === 'stripe' ? 'Stripe' : ($payment['provider'] ?? 'Manual');
-                $transactionId = $payment['transactionId'] ?? '';
-                
-                $xeroPaymentResult = $xeroService->recordPayment(
-                    $xeroInvoiceId,
-                    $amount,
-                    $paymentMethod,
-                    $transactionId
+            // SECURITY: Check if payment is already confirmed (duplicate payment protection)
+            $existingPayment = $meta['payment'] ?? null;
+            if (!empty($existingPayment['status']) && $existingPayment['status'] === 'paid') {
+                delete_transient($lockKey);
+                return [
+                    'ok' => true,
+                    'payment' => $existingPayment,
+                    'alreadyPaid' => true,
+                ];
+            }
+            
+            // Validate estimate is booked
+            $workflowStatus = $meta['workflow']['status'] ?? 'requested';
+            if ($workflowStatus !== 'booked') {
+                delete_transient($lockKey);
+                return new WP_Error(
+                    'invalid_status',
+                    __('Estimate must be booked before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
+                    ['status' => 400]
                 );
-                
-                if (is_wp_error($xeroPaymentResult)) {
-                    // Log error but don't fail the payment confirmation
-                    $this->logger->error('Failed to record payment in Xero', [
-                        'estimateId' => $estimateId,
-                        'xeroInvoiceId' => $xeroInvoiceId,
-                        'amount' => $amount,
-                        'error' => $xeroPaymentResult->get_error_message(),
-                    ]);
-                } else {
-                    $this->logger->info('Payment recorded in Xero', [
-                        'estimateId' => $estimateId,
-                        'xeroInvoiceId' => $xeroInvoiceId,
-                        'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
-                        'amount' => $amount,
-                    ]);
+            }
+
+            // Get invoice to validate payment amount
+            $invoice = $meta['invoice'] ?? null;
+            if (!$invoice) {
+                delete_transient($lockKey);
+                return new WP_Error('bad_request', __('Invoice not found for this estimate', 'cheapalarms'), ['status' => 400]);
+            }
+            
+            // Get invoice total for validation
+            $invoiceTotal = null;
+            if (isset($invoice['ghl']['total'])) {
+                $invoiceTotal = (float) $invoice['ghl']['total'];
+            } elseif (isset($invoice['total'])) {
+                $invoiceTotal = (float) $invoice['total'];
+            }
+            
+            if ($invoiceTotal === null || $invoiceTotal <= 0) {
+                delete_transient($lockKey);
+                return new WP_Error('bad_request', __('Invalid invoice total. Cannot process payment.', 'cheapalarms'), ['status' => 400]);
+            }
+            
+            // SECURITY: For Stripe payments, validate transactionId matches stored payment intent ID
+            $provider = sanitize_text_field($paymentData['provider'] ?? 'mock');
+            $transactionId = sanitize_text_field($paymentData['transactionId'] ?? null);
+            
+            if ($provider === 'stripe' && !empty($transactionId)) {
+                $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
+                if (!empty($expiresAt) && time() > (int) $expiresAt) {
+                    delete_transient($lockKey);
+                    return new WP_Error(
+                        'payment_intent_expired',
+                        __('Payment intent has expired. Please create a new payment intent.', 'cheapalarms'),
+                        ['status' => 400]
+                    );
                 }
+
+                // SECURITY: Check if this payment intent was already used (prevent duplicate payment intent usage)
+                // This check must come FIRST before checking stored payment intent ID, because after a payment
+                // is confirmed, the paymentIntentId is cleared to allow new payment intents
+                $existingPayments = $meta['payment']['payments'] ?? [];
+                if (is_array($existingPayments)) {
+                    foreach ($existingPayments as $prevPayment) {
+                        if (!empty($prevPayment['transactionId']) && $prevPayment['transactionId'] === $transactionId) {
+                            delete_transient($lockKey);
+                            $this->logger->warning('Payment intent already used', [
+                                'estimateId' => $estimateId,
+                                'transactionId' => $transactionId,
+                            ]);
+                            return new WP_Error(
+                                'payment_intent_already_used',
+                                __('This payment intent has already been used. Please create a new payment intent for additional payments.', 'cheapalarms'),
+                                ['status' => 400]
+                            );
+                        }
+                    }
+                }
+                
+                // SECURITY: Validate transactionId matches stored payment intent ID (if one exists)
+                // Note: After a payment is confirmed, paymentIntentId is cleared to allow new payment intents
+                // So this check only applies if a payment intent was recently created but not yet confirmed
+                $storedPaymentIntentId = $meta['payment']['paymentIntentId'] ?? null;
+                if (!empty($storedPaymentIntentId) && $transactionId !== $storedPaymentIntentId) {
+                    delete_transient($lockKey);
+                    $this->logger->warning('Transaction ID mismatch in payment confirmation', [
+                        'estimateId' => $estimateId,
+                        'providedTransactionId' => $transactionId,
+                        'storedPaymentIntentId' => $storedPaymentIntentId,
+                    ]);
+                    return new WP_Error(
+                        'transaction_mismatch',
+                        __('Transaction ID does not match the payment intent for this estimate. Please create a new payment intent for additional payments.', 'cheapalarms'),
+                        ['status' => 400]
+                    );
+                }
+                
+                // SECURITY: For Stripe payments, validate amount against actual payment intent amount from Stripe
+                // This prevents frontend amount manipulation
+                $stripeService = $this->container->get(\CheapAlarms\Plugin\Services\StripeService::class);
+                $paymentIntentResult = $stripeService->getPaymentIntent($transactionId);
+                
+                if (is_wp_error($paymentIntentResult)) {
+                    delete_transient($lockKey);
+                    $this->logger->error('Failed to retrieve payment intent from Stripe', [
+                        'estimateId' => $estimateId,
+                        'paymentIntentId' => $transactionId,
+                        'error' => $paymentIntentResult->get_error_message(),
+                    ]);
+                    return new WP_Error(
+                        'stripe_verification_failed',
+                        __('Failed to verify payment with Stripe. Please contact support.', 'cheapalarms'),
+                        ['status' => 500]
+                    );
+                }
+                
+                // Get actual payment amount from Stripe (already converted from cents to dollars)
+                $actualPaymentAmount = $paymentIntentResult['amount'] ?? 0;
+                
+                // Verify payment intent status is succeeded
+                if (($paymentIntentResult['status'] ?? 'unknown') !== 'succeeded') {
+                    delete_transient($lockKey);
+                    return new WP_Error(
+                        'payment_not_succeeded',
+                        __('Payment was not successful. Please try again.', 'cheapalarms'),
+                        ['status' => 400]
+                    );
+                }
+                
+                // Use actual payment amount from Stripe, not frontend-provided amount
+                $amount = $actualPaymentAmount;
             } else {
-                $this->logger->warning('Xero invoice ID exists but Xero is not connected', [
+                // For non-Stripe payments, get amount from payment data or use invoice total
+                $amount = isset($paymentData['amount']) ? (float) $paymentData['amount'] : $invoiceTotal;
+            }
+            
+            if ($amount <= 0) {
+                delete_transient($lockKey);
+                return new WP_Error('bad_request', __('Payment amount must be greater than zero', 'cheapalarms'), ['status' => 400]);
+            }
+            
+            // SECURITY: Calculate cumulative payment amount (for partial payment tracking)
+            $existingPaidAmount = 0;
+            if (!empty($existingPayment['amount']) && $existingPayment['status'] === 'paid') {
+                // If already paid, use existing amount (shouldn't happen due to duplicate check above, but defensive)
+                $existingPaidAmount = (float) $existingPayment['amount'];
+            } elseif (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
+                // Sum all previous partial payments
+                foreach ($meta['payment']['payments'] as $prevPayment) {
+                    if (!empty($prevPayment['amount'])) {
+                        $existingPaidAmount += (float) $prevPayment['amount'];
+                    }
+                }
+            }
+            
+            $totalPaidAmount = $existingPaidAmount + $amount;
+            
+            // SECURITY: Validate cumulative payment amount against invoice total
+            // Allow partial payments (up to invoice total), but prevent overpayment
+            if ($totalPaidAmount > $invoiceTotal) {
+                delete_transient($lockKey);
+                
+                // If Stripe already charged, attempt a refund to avoid over-collection
+                if ($provider === 'stripe' && !empty($transactionId)) {
+                    try {
+                        $stripeService = $this->container->get(\CheapAlarms\Plugin\Services\StripeService::class);
+                        $refundResult = $stripeService->refundPaymentIntent($transactionId, 'requested_by_customer', $amount);
+                        if (is_wp_error($refundResult)) {
+                            $this->logger->error('Failed to refund over-collected Stripe payment', [
+                                'estimateId' => $estimateId,
+                                'transactionId' => $transactionId,
+                                'error' => $refundResult->get_error_message(),
+                                'invoiceTotal' => $invoiceTotal,
+                                'existingPaidAmount' => $existingPaidAmount,
+                                'attemptedAmount' => $amount,
+                            ]);
+                        } else {
+                            $this->logger->warning('Refunded Stripe payment due to overpayment validation', [
+                                'estimateId' => $estimateId,
+                                'transactionId' => $transactionId,
+                                'refundStatus' => $refundResult['status'] ?? null,
+                                'refundAmount' => $refundResult['amount'] ?? null,
+                            ]);
+                        }
+                    } catch (\Exception $refundException) {
+                        $this->logger->error('Exception during Stripe refund after validation failure', [
+                            'estimateId' => $estimateId,
+                            'transactionId' => $transactionId,
+                            'exception' => $refundException->getMessage(),
+                        ]);
+                    }
+                }
+
+                return new WP_Error(
+                    'payment_exceeds_invoice',
+                    sprintf(
+                        __('Total payment amount (%.2f) exceeds invoice total (%.2f). Remaining balance: %.2f', 'cheapalarms'),
+                        $totalPaidAmount,
+                        $invoiceTotal,
+                        max(0, $invoiceTotal - $existingPaidAmount)
+                    ),
+                    [
+                        'status' => 400,
+                        'invoiceTotal' => $invoiceTotal,
+                        'existingPaidAmount' => $existingPaidAmount,
+                        'amountProvided' => $amount,
+                        'totalPaidAmount' => $totalPaidAmount,
+                        'remainingBalance' => max(0, $invoiceTotal - $existingPaidAmount),
+                    ]
+                );
+            }
+
+            // Update payment data
+            // Track individual payments for partial payment support
+            $paymentRecord = [
+                'amount' => $amount,
+                'provider' => sanitize_text_field($paymentData['provider'] ?? 'mock'),
+                'transactionId' => sanitize_text_field($paymentData['transactionId'] ?? null),
+                'paidAt' => current_time('mysql'),
+            ];
+            
+            // Initialize payments array if it doesn't exist
+            $payments = $meta['payment']['payments'] ?? [];
+            if (!is_array($payments)) {
+                $payments = [];
+            }
+            
+            // Add this payment to the payments array
+            $payments[] = $paymentRecord;
+            
+            // Determine if invoice is fully paid
+            $isFullyPaid = abs($totalPaidAmount - $invoiceTotal) < 0.01; // Tolerance for floating point
+            
+            // Update payment data structure
+            $payment = [
+                'amount' => $totalPaidAmount, // Total amount paid (cumulative)
+                'status' => $isFullyPaid ? 'paid' : 'partial',
+                'provider' => $provider,
+                'transactionId' => $transactionId,
+                'paidAt' => current_time('mysql'),
+                'payments' => $payments, // Array of individual payment records
+                'invoiceTotal' => $invoiceTotal,
+                'remainingBalance' => max(0, $invoiceTotal - $totalPaidAmount),
+                // SECURITY: Clear paymentIntentId after payment is confirmed to allow creating new payment intents
+                // The payment intent ID is preserved in the payments array for tracking
+                'paymentIntentId' => null,
+                'paymentIntentExpiresAt' => null,
+            ];
+
+            // Update workflow status to "paid" only if fully paid
+            $workflow = $meta['workflow'] ?? [];
+            if ($isFullyPaid) {
+                $workflow['status'] = 'paid';
+                $workflow['currentStep'] = 5;
+                $workflow['paidAt'] = current_time('mysql');
+            } else {
+                // Keep status as "booked" if partial payment
+                $workflow['status'] = 'booked';
+            }
+            
+            // Preserve existing timestamps
+            if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+                $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+            }
+            if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
+                $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
+            }
+            if (!isset($workflow['acceptedAt']) && isset($meta['workflow']['acceptedAt'])) {
+                $workflow['acceptedAt'] = $meta['workflow']['acceptedAt'];
+            }
+            if (!isset($workflow['bookedAt']) && isset($meta['workflow']['bookedAt'])) {
+                $workflow['bookedAt'] = $meta['workflow']['bookedAt'];
+            }
+
+            // Update meta
+            $this->updateMeta($estimateId, [
+                'payment' => $payment,
+                'workflow' => $workflow,
+            ]);
+            
+            // Release lock
+            delete_transient($lockKey);
+
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $this->logger->info('Payment confirmed successfully', [
                     'estimateId' => $estimateId,
-                    'xeroInvoiceId' => $xeroInvoiceId,
+                    'amount' => $amount,
+                    'totalPaidAmount' => $totalPaidAmount,
+                    'isFullyPaid' => $isFullyPaid,
                 ]);
             }
-        }
 
-        // Send payment confirmation email (non-blocking)
-        if ($locationId) {
-            $this->sendPaymentConfirmationEmail($estimateId, $locationId, $payment);
-        }
+            // Record payment in Xero if invoice was synced to Xero
+            // SECURITY: xeroInvoiceId is already validated as it comes from invoice meta linked to this estimate
+            // The invoice was retrieved above and belongs to this estimateId, so xeroInvoiceId is safe
+            $xeroInvoiceId = $invoice['xeroInvoiceId'] ?? null;
+            
+            if ($xeroInvoiceId) {
+                $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+                
+                // Check if Xero is connected
+                if ($xeroService->isConnected()) {
+                    $paymentMethod = $payment['provider'] === 'stripe' ? 'Stripe' : ($payment['provider'] ?? 'Manual');
+                    $transactionId = $payment['transactionId'] ?? '';
+                    
+                    // SECURITY: xeroInvoiceId is validated - it comes from invoice meta that belongs to this estimate
+                    // No additional validation needed as the invoice was already retrieved from this estimate's meta
+                    $xeroPaymentResult = $xeroService->recordPayment(
+                        $xeroInvoiceId,
+                        $amount,
+                        $paymentMethod,
+                        $transactionId
+                    );
+                    
+                    if (is_wp_error($xeroPaymentResult)) {
+                        // Log error but don't fail the payment confirmation
+                        $this->logger->error('Failed to record payment in Xero', [
+                            'estimateId' => $estimateId,
+                            'xeroInvoiceId' => $xeroInvoiceId,
+                            'amount' => $amount,
+                            'error' => $xeroPaymentResult->get_error_message(),
+                        ]);
+                    } else {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        $this->logger->info('Payment recorded in Xero', [
+                            'estimateId' => $estimateId,
+                            'xeroInvoiceId' => $xeroInvoiceId,
+                            'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
+                            'amount' => $amount,
+                        ]);
+                    }
+                    }
+                } else {
+                    $this->logger->warning('Xero invoice ID exists but Xero is not connected', [
+                        'estimateId' => $estimateId,
+                        'xeroInvoiceId' => $xeroInvoiceId,
+                    ]);
+                }
+            }
 
-        return [
-            'ok' => true,
-            'payment' => $payment,
-            'workflow' => $workflow,
-        ];
+            // Send payment confirmation email (non-blocking)
+            if ($locationId) {
+                $this->sendPaymentConfirmationEmail($estimateId, $locationId, $payment);
+            }
+
+            return [
+                'ok' => true,
+                'payment' => $payment,
+                'workflow' => $workflow,
+                'isFullyPaid' => $isFullyPaid,
+                'remainingBalance' => max(0, $invoiceTotal - $totalPaidAmount),
+            ];
+        } catch (\Exception $e) {
+            // Release lock on error
+            delete_transient($lockKey);
+            $this->logger->error('Exception during payment confirmation', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return new WP_Error(
+                'payment_confirmation_error',
+                __('An error occurred while confirming payment. Please try again.', 'cheapalarms'),
+                ['status' => 500]
+            );
+        }
     }
 
     private function extractGhlErrorMessage(WP_Error $error): string
@@ -1338,17 +1669,20 @@ class PortalService
         wp_update_user(['ID' => $userId, 'role' => 'ca_customer']);
         $this->attachEstimateToUser((int) $userId, $estimateId, $locationId);
 
-        $token     = $this->generateToken();
+        $token     = self::generateToken();
         $expiresAt = current_time('timestamp') + DAY_IN_SECONDS * 7;
         $portalUrl = $this->resolvePortalUrl($estimateId, $token);
 
+        // SECURITY: Hash token before storage to prevent disclosure if database is compromised
+        $tokenHash = self::hashInviteToken($token);
+        
         $accountMeta = [
             'status'      => 'active',
             'statusLabel' => 'Account active',
             'lastInviteAt'=> current_time('mysql'),
             'canResend'   => true,
             'portalUrl'   => $portalUrl,
-            'inviteToken' => $token,
+            'inviteToken' => $tokenHash, // Store hash, not plaintext
             'expiresAt'   => gmdate('c', $expiresAt),
             'userId'      => (int) $userId,
             'locationId'  => $locationId,
@@ -1396,16 +1730,28 @@ class PortalService
      * Link estimate to existing account without provisioning
      * @return array|WP_Error
      */
+    /**
+     * Link estimate to existing user account
+     * SECURITY: This method should only be called in trusted contexts:
+     * - Admin operations (estimate creation)
+     * - User-initiated actions (password reset with valid estimateId)
+     * - Invite token validation (user proving access via invite link)
+     * 
+     * @param string $estimateId Estimate ID to link
+     * @param int $userId User ID to link estimate to
+     * @param string|null $locationId Optional location ID
+     * @return array|WP_Error
+     */
     public function linkEstimateToExistingAccount(string $estimateId, int $userId, ?string $locationId = null): array|WP_Error
     {
-        // Attach estimate to user
-        $this->attachEstimateToUser($userId, $estimateId, $locationId);
-        
-        // Get user info
+        // SECURITY: Basic validation - verify user exists
         $user = get_user_by('id', $userId);
         if (!$user) {
             return new WP_Error('user_not_found', __('User not found.', 'cheapalarms'), ['status' => 404]);
         }
+        
+        // Attach estimate to user
+        $this->attachEstimateToUser($userId, $estimateId, $locationId);
         
         // Update meta but don't send email (user already has account)
         $this->updateMeta($estimateId, [
@@ -1441,7 +1787,12 @@ class PortalService
         }
 
         $currentMeta = $this->getMeta($estimateId)['account'] ?? [];
-        $token       = $currentMeta['inviteToken'] ?? $this->generateToken();
+        
+        // SECURITY: Always generate new token for resend (token rotation)
+        // This invalidates old invite links, which is a security feature
+        // Old links will fail validation, forcing users to use the latest invite
+        $token = self::generateToken();
+        $tokenHash = self::hashInviteToken($token);
         $portalLink  = $this->resolvePortalUrl($estimateId, $token);
 
         $userId      = isset($currentMeta['userId']) ? (int) $currentMeta['userId'] : (int) email_exists($email);
@@ -1465,7 +1816,7 @@ class PortalService
                 'status'       => $currentMeta['status'] ?? 'pending',
                 'statusLabel'  => ($currentMeta['status'] ?? '') === 'active' ? 'Account active' : 'Invite sent',
                 'canResend'    => true,
-                'inviteToken'  => $token,
+                'inviteToken'  => $tokenHash, // Store hash, not plaintext
                 'portalUrl'    => $portalLink,
                 'expiresAt'    => gmdate('c', current_time('timestamp') + DAY_IN_SECONDS * 7),
                 'userId'       => $userId ?: ($currentMeta['userId'] ?? null),
@@ -1661,8 +2012,8 @@ class PortalService
         $accountToken = $meta['account']['inviteToken'] ?? null;
         $expiresAt = $meta['account']['expiresAt'] ?? null;
 
-        // Check if token matches
-        if (!is_string($accountToken) || !hash_equals($accountToken, $token)) {
+        // SECURITY: Verify token using secure comparison (supports both hashed and legacy plaintext)
+        if (!is_string($accountToken) || !self::verifyInviteToken($token, $accountToken)) {
             $this->logger->warning('Invalid invite token', [
                 'estimateId' => $estimateId,
                 'tokenProvided' => substr($token, 0, 8) . '...',
@@ -1673,6 +2024,20 @@ class PortalService
                 'message' => __('This invite link is invalid. Please use the link from your email.', 'cheapalarms'),
                 'expiresAt' => $expiresAt,
             ];
+        }
+        
+        // SECURITY: Upgrade legacy plaintext tokens to hashed format (one-time migration)
+        // Only upgrade if stored token is plaintext (not a hash)
+        if (!preg_match('/^\$2[ayb]\$/', $accountToken)) {
+            $tokenHash = self::hashInviteToken($token);
+            $this->updateMeta($estimateId, [
+                'account' => array_merge($meta['account'] ?? [], [
+                    'inviteToken' => $tokenHash,
+                ]),
+            ]);
+            $this->logger->info('Upgraded invite token to hashed format', [
+                'estimateId' => $estimateId,
+            ]);
         }
 
         // Check expiration

@@ -501,8 +501,9 @@ class EstimateService
         } else {
             // Account exists - ensure portal URL and invite token are set
             if (empty($accountMeta['portalUrl']) || empty($accountMeta['inviteToken'])) {
-                // Generate new token and portal URL
-                $token = bin2hex(random_bytes(16));
+                // SECURITY: Generate new token and hash it before storage
+                $token = \CheapAlarms\Plugin\Services\PortalService::generateToken();
+                $tokenHash = \CheapAlarms\Plugin\Services\PortalService::hashInviteToken($token);
                 $frontendUrl = $this->config->getFrontendUrl();
                 $portalUrl = add_query_arg(
                     [
@@ -512,7 +513,7 @@ class EstimateService
                     trailingslashit($frontendUrl) . 'portal'
                 );
                 
-                $accountMeta['inviteToken'] = $token;
+                $accountMeta['inviteToken'] = $tokenHash; // Store hash, not plaintext
                 $accountMeta['portalUrl'] = $portalUrl;
                 $accountMeta['expiresAt'] = gmdate('c', current_time('timestamp') + DAY_IN_SECONDS * 7);
                 
@@ -527,7 +528,11 @@ class EstimateService
 
         // If portal URL is still empty, generate it
         if (empty($portalUrl)) {
-            $token = $accountMeta['inviteToken'] ?? bin2hex(random_bytes(16));
+            // SECURITY: Generate new token and hash it before storage
+            // Note: If accountMeta['inviteToken'] exists, it's already hashed, so we can't use it in URL
+            // We must generate a new token and update the stored hash to match
+            $token = \CheapAlarms\Plugin\Services\PortalService::generateToken();
+            $tokenHash = \CheapAlarms\Plugin\Services\PortalService::hashInviteToken($token);
             $frontendUrl = $this->config->getFrontendUrl();
             $portalUrl = add_query_arg(
                 [
@@ -536,6 +541,11 @@ class EstimateService
                 ],
                 trailingslashit($frontendUrl) . 'portal'
             );
+            // SECURITY: Always update token hash when generating new token (old hash becomes invalid)
+            // This ensures the stored hash matches the token in the URL
+            $accountMeta['inviteToken'] = $tokenHash;
+            $accountMeta['portalUrl'] = $portalUrl;
+            $this->updatePortalMeta($estimateId, ['account' => $accountMeta]);
         }
 
         // Send estimate-specific email (not generic portal invite)
