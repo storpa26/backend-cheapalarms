@@ -207,6 +207,11 @@ class PortalService
         // Portal meta takes precedence - if accepted in portal, it's accepted
         $isAccepted = $isAcceptedInPortal || $isAcceptedInGhl;
 
+        // Check if acceptance is enabled and workflow is ready
+        $workflowStatus = $meta['workflow']['status'] ?? null;
+        $acceptanceEnabled = !empty($meta['quote']['acceptance_enabled']);
+        $isReadyToAccept = $workflowStatus === 'ready_to_accept';
+        
         $quoteStatus = [
             'status'      => $isAccepted ? 'accepted' : ($isRejectedInPortal ? 'rejected' : 'sent'),
             'statusLabel' => $isAcceptedInPortal 
@@ -214,8 +219,15 @@ class PortalService
                 : ($isAcceptedInGhl ? 'Accepted via GHL' : ($isRejectedInPortal ? 'Rejected' : 'Sent')),
             'number'      => $estimate['estimateNumber'] ?? $estimate['estimateId'],
             'acceptedAt'  => $meta['quote']['acceptedAt'] ?? null,
-            'canAccept'   => !$isAccepted && !$isRejectedInPortal, // Can't accept if already accepted or rejected
+            'canAccept'   => !$isAccepted && !$isRejectedInPortal && $acceptanceEnabled && $isReadyToAccept, // Can only accept when acceptance is enabled and workflow is ready_to_accept
+            'approval_requested' => $meta['quote']['approval_requested'] ?? false, // NEW: Include approval_requested flag
+            'acceptance_enabled' => $acceptanceEnabled, // Include acceptance_enabled flag
         ];
+        
+        // Store estimate snapshot data for fast dashboard loading (no GHL calls needed)
+        $quoteStatus['total'] = $estimate['total'] ?? ($meta['quote']['total'] ?? null);
+        $quoteStatus['currency'] = $estimate['currency'] ?? ($meta['quote']['currency'] ?? 'AUD');
+        $quoteStatus['last_synced_at'] = current_time('mysql');
         
         // If accepted in portal but no acceptedAt timestamp, set it
         if ($isAcceptedInPortal && empty($quoteStatus['acceptedAt'])) {
@@ -229,9 +241,15 @@ class PortalService
         // Track if we made any meta updates to avoid unnecessary getMeta() calls
         $metaUpdated = false;
         
-        // Only update meta if status changed or if we need to sync acceptedAt
-        if ($portalMetaStatus !== $quoteStatus['status'] || 
-            ($isAccepted && empty($meta['quote']['acceptedAt']))) {
+        // Update meta if status changed, acceptedAt changed, or estimate data is missing/stale
+        $needsUpdate = false;
+        $needsUpdate = $needsUpdate || ($portalMetaStatus !== $quoteStatus['status']);
+        $needsUpdate = $needsUpdate || ($isAccepted && empty($meta['quote']['acceptedAt']));
+        $needsUpdate = $needsUpdate || empty($meta['quote']['number']); // Store number if missing
+        $needsUpdate = $needsUpdate || empty($meta['quote']['total']); // Store total if missing
+        $needsUpdate = $needsUpdate || ($meta['quote']['number'] ?? null) !== $quoteStatus['number']; // Update if number changed
+        
+        if ($needsUpdate) {
             $this->updateMeta($estimateId, ['quote' => $quoteStatus]);
             $meta['quote'] = $quoteStatus; // Update local copy instead of fetching
             $metaUpdated = true;
@@ -341,6 +359,23 @@ class PortalService
             );
         }
 
+        // Check if acceptance is enabled (CRITICAL: Customer can only accept when admin enables it)
+        $workflow = $meta['workflow'] ?? [];
+        $quote = $meta['quote'] ?? [];
+        
+        if (empty($quote['acceptance_enabled']) || ($workflow['status'] ?? null) !== 'ready_to_accept') {
+            $this->logger->warning('Attempt to accept estimate before acceptance enabled', [
+                'estimateId' => $estimateId,
+                'acceptance_enabled' => $quote['acceptance_enabled'] ?? false,
+                'workflow_status' => $workflow['status'] ?? null,
+            ]);
+            return new WP_Error(
+                'acceptance_not_enabled',
+                __('Acceptance is not yet enabled for this estimate. Please wait for admin review.', 'cheapalarms'),
+                ['status' => 403]
+            );
+        }
+
         // Use WordPress transient for race condition protection (5 second lock)
         $lockKey = 'ca_accept_lock_' . $estimateId;
         $lockValue = get_transient($lockKey);
@@ -385,6 +420,8 @@ class PortalService
                 'statusLabel' => 'Accepted',
                 'acceptedAt'  => current_time('mysql'),
                 'canAccept'   => false,
+                'approval_requested' => false, // Reset after acceptance
+                'acceptance_enabled' => false, // Reset after acceptance
             ];
 
             // Initialize or update workflow status to "accepted"
@@ -753,16 +790,26 @@ class PortalService
         set_transient($lockKey, time(), 5);
 
         try {
+            // Get workflow to update it
+            $workflow = $meta['workflow'] ?? [];
+            $workflow['status'] = 'rejected';
+            $workflow['rejectedAt'] = current_time('mysql');
+            
             $status = [
                 'status'         => 'rejected',
                 'statusLabel'    => 'Rejected',
                 'rejectedAt'     => current_time('mysql'),
                 'rejectionReason' => sanitize_text_field($reason),
                 'canAccept'      => false,
+                'approval_requested' => false, // Reset approval request
+                'acceptance_enabled' => false, // Reset acceptance enabled
             ];
 
             // Update WordPress meta first
-            $updateResult = $this->updateMeta($estimateId, ['quote' => $status]);
+            $updateResult = $this->updateMeta($estimateId, [
+                'quote' => $status,
+                'workflow' => $workflow,
+            ]);
             if (!$updateResult) {
                 $this->logger->error('Failed to update portal meta on rejection', [
                     'estimateId' => $estimateId,
@@ -797,6 +844,119 @@ class PortalService
             // Always release lock at the end, even if there's an error
             delete_transient($lockKey);
         }
+    }
+
+    /**
+     * Request review after uploading photos (or immediately if no photos required)
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @return array|WP_Error
+     */
+    public function requestReview(string $estimateId, string $locationId = '')
+    {
+        $meta = $this->getMeta($estimateId);
+        $workflow = $meta['workflow'] ?? [];
+        $quote = $meta['quote'] ?? [];
+        $photos = $meta['photos'] ?? [];
+        
+        // Validate workflow status
+        if (($workflow['status'] ?? null) !== 'sent') {
+            return new WP_Error(
+                'invalid_status',
+                __('Can only request review when estimate is sent.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // Validate not already requested
+        if (!empty($quote['approval_requested'])) {
+            return new WP_Error(
+                'already_requested',
+                __('Review has already been requested.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // Validate not already accepted/rejected
+        if (($quote['status'] ?? 'sent') === 'accepted') {
+            return new WP_Error(
+                'already_accepted',
+                __('Estimate has already been accepted.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        if (($quote['status'] ?? 'sent') === 'rejected') {
+            return new WP_Error(
+                'already_rejected',
+                __('Estimate has been rejected.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // If photos required, validate photos uploaded
+        if (!empty($quote['photos_required'])) {
+            $uploadedCount = $photos['uploaded'] ?? 0;
+            if ($uploadedCount === 0) {
+                return new WP_Error(
+                    'photos_required',
+                    __('Please upload photos before requesting review.', 'cheapalarms'),
+                    ['status' => 400]
+                );
+            }
+            
+            // Auto-submit photos if not already submitted
+            if (($photos['submission_status'] ?? null) !== 'submitted') {
+                $photos['submission_status'] = 'submitted';
+                $photos['submitted_at'] = current_time('mysql');
+            }
+        }
+        
+        // Update meta
+        $updateResult = $this->updateMeta($estimateId, [
+            'quote' => array_merge($quote, [
+                'approval_requested' => true,
+            ]),
+            'workflow' => array_merge($workflow, [
+                'status' => 'under_review',
+                'currentStep' => 2,
+            ]),
+            'photos' => $photos, // Include updated photos if auto-submitted
+        ]);
+        
+        if (!$updateResult) {
+            $this->logger->error('Failed to update portal meta on review request', [
+                'estimateId' => $estimateId,
+            ]);
+            return new WP_Error(
+                'update_failed',
+                __('Failed to save review request. Please refresh the page and try again.', 'cheapalarms'),
+                ['status' => 500]
+            );
+        }
+        
+        // Send notification to admin
+        $this->sendReviewRequestNotificationToAdmin($estimateId, $locationId, $quote, $photos);
+        
+        $this->logger->info('Review requested', [
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+            'photosRequired' => !empty($quote['photos_required']),
+            'photosUploaded' => $photos['uploaded'] ?? 0,
+        ]);
+        
+        return [
+            'ok' => true,
+            'message' => __('Review request submitted successfully. Admin will review and notify you when acceptance is enabled.', 'cheapalarms'),
+            'workflow' => [
+                'status' => 'under_review',
+                'currentStep' => 2,
+            ],
+            'quote' => [
+                'approval_requested' => true,
+            ],
+        ];
     }
 
     /**
@@ -1594,24 +1754,24 @@ class PortalService
         $photos['submitted_at'] = current_time('mysql');
         $photos['last_edited_at'] = current_time('mysql');
         
-        // Update workflow to "reviewing" if still "requested"
+        // Update workflow status (NEW: Don't change if already 'sent' or 'under_review')
         $workflow = $meta['workflow'] ?? [];
         $currentWorkflowStatus = $workflow['status'] ?? 'requested';
         
+        // Only update workflow if still in 'requested' status
+        // If 'sent' or 'under_review', keep current status (workflow changes when review is requested)
         if ($currentWorkflowStatus === 'requested') {
             // Initialize workflow if it doesn't exist
             if (empty($workflow) || !isset($workflow['status'])) {
                 $workflow = [
-                    'status' => 'reviewing',
+                    'status' => 'sent', // NEW: Changed from 'reviewing' to 'sent'
                     'currentStep' => 2,
                     'requestedAt' => current_time('mysql'),
-                    'reviewedAt' => current_time('mysql'),
                 ];
             } else {
                 // Update existing workflow
-                $workflow['status'] = 'reviewing';
+                $workflow['status'] = 'sent'; // NEW: Changed from 'reviewing' to 'sent'
                 $workflow['currentStep'] = 2;
-                $workflow['reviewedAt'] = current_time('mysql');
                 
                 // Preserve requestedAt if it exists
                 if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
@@ -1619,6 +1779,7 @@ class PortalService
                 }
             }
         }
+        // If already 'sent', 'under_review', or 'ready_to_accept', preserve current status
         
         // Update meta using updateMeta() for proper locking (not update_option directly)
         $this->updateMeta($estimateId, [
@@ -1832,6 +1993,36 @@ class PortalService
     }
 
     /**
+     * Get dashboard status from portal meta only (no GHL API calls)
+     * Fast read-only method for dashboard listing
+     * 
+     * @param string $estimateId Estimate ID
+     * @param array $meta Portal meta array
+     * @return array Dashboard status data
+     */
+    private function getDashboardStatusFromMeta(string $estimateId, array $meta): array
+    {
+        $quote = $meta['quote'] ?? [];
+        $account = $meta['account'] ?? [];
+        
+        return [
+            'estimateId'   => $estimateId,
+            'quote'        => [
+                'status'      => $quote['status'] ?? 'sent',
+                'statusLabel' => $quote['statusLabel'] ?? 'Sent',
+                'number'      => $quote['number'] ?? $estimateId, // Fallback to ID if number not stored
+                'acceptedAt'  => $quote['acceptedAt'] ?? null,
+            ],
+            'account'      => [
+                'portalUrl'    => $account['portalUrl'] ?? null,
+                'resetUrl'     => $account['resetUrl'] ?? null,
+                'lastInviteAt' => $account['lastInviteAt'] ?? null,
+            ],
+            'invoice'      => $meta['invoice'] ?? null,
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function getDashboardForUser(int $userId): array
@@ -1846,12 +2037,6 @@ class PortalService
             $locations = [];
         }
 
-        // Get the user object to pass to getStatus
-        $user = get_user_by('id', $userId);
-        if (!$user) {
-            return [];
-        }
-
         $items = [];
         foreach (array_unique($estimateIds) as $estimateId) {
             if (!$estimateId) {
@@ -1859,14 +2044,16 @@ class PortalService
             }
 
             $locationId = $locations[$estimateId] ?? '';
-            // Pass the user object to getStatus so it can properly check permissions
-            $status     = $this->getStatus($estimateId, $locationId, null, $user);
-            if (is_wp_error($status)) {
+            
+            // Fast path: Read from portal meta only (no GHL API calls)
+            $meta = $this->getMeta($estimateId);
+            if (empty($meta)) {
+                // Skip estimates with no portal meta
                 continue;
             }
 
+            $status = $this->getDashboardStatusFromMeta($estimateId, $meta);
             $items[] = array_merge($status, [
-                'estimateId' => $estimateId,
                 'locationId' => $locationId,
             ]);
         }
@@ -3014,7 +3201,7 @@ class PortalService
 
     /**
      * Complete review for an estimate
-     * Transitions workflow from "reviewing" to "reviewed"
+     * Transitions workflow from "under_review" to "ready_to_accept"
      * Sends notification email to customer
      * 
      * @param string $estimateId Estimate ID
@@ -3033,31 +3220,56 @@ class PortalService
         $workflow = $meta['workflow'] ?? [];
         $currentStatus = $workflow['status'] ?? 'requested';
 
-        // Validate that estimate is in "reviewing" status
-        if ($currentStatus !== 'reviewing') {
+        // Validate that estimate is in "under_review" status (NEW: changed from "reviewing")
+        if ($currentStatus !== 'under_review') {
             return new WP_Error(
                 'invalid_status',
                 sprintf(
-                    __('Cannot complete review. Estimate is in "%s" status, expected "reviewing".', 'cheapalarms'),
+                    __('Cannot complete review. Estimate is in "%s" status, expected "under_review".', 'cheapalarms'),
                     $currentStatus
                 ),
                 ['status' => 400, 'currentStatus' => $currentStatus]
             );
         }
-
-        // Validate that photos were submitted
-        $photos = $meta['photos'] ?? [];
-        if (($photos['submission_status'] ?? '') !== 'submitted') {
+        
+        // Validate that review was requested
+        $quote = $meta['quote'] ?? [];
+        if (empty($quote['approval_requested'])) {
             return new WP_Error(
-                'photos_not_submitted',
-                __('Cannot complete review. Photos must be submitted first.', 'cheapalarms'),
+                'review_not_requested',
+                __('Cannot complete review. Customer has not requested review yet.', 'cheapalarms'),
                 ['status' => 400]
             );
         }
+        
+        // Validate photos if required
+        $photos = $meta['photos'] ?? [];
+        if (!empty($quote['photos_required'])) {
+            // If photos required, validate they were submitted
+            if (($photos['submission_status'] ?? '') !== 'submitted') {
+                return new WP_Error(
+                    'photos_not_submitted',
+                    __('Cannot complete review. Photos must be submitted first.', 'cheapalarms'),
+                    ['status' => 400]
+                );
+            }
+        }
 
-        // Transition workflow from "reviewing" to "reviewed"
-        $workflow['status'] = 'reviewed';
+        // Transition workflow from "under_review" to "ready_to_accept" (NEW: changed from "reviewed")
+        $workflow['status'] = 'ready_to_accept';
         $workflow['currentStep'] = 2; // Still step 2 (Review step)
+        
+        // Enable acceptance
+        $quote['acceptance_enabled'] = true;
+        $quote['enabled_at'] = current_time('mysql');
+        $quote['enabled_by'] = get_current_user_id() ?: 1;
+        
+        // Mark photos as reviewed (if required)
+        if (!empty($quote['photos_required'])) {
+            $photos['reviewed'] = true;
+            $photos['reviewed_at'] = current_time('mysql');
+            $photos['reviewed_by'] = get_current_user_id() ?: 1;
+        }
         
         // Update reviewedAt timestamp if not already set
         if (empty($workflow['reviewedAt'])) {
@@ -3072,6 +3284,8 @@ class PortalService
         // Update meta
         $updateResult = $this->updateMeta($estimateId, [
             'workflow' => $workflow,
+            'quote' => $quote,
+            'photos' => $photos,
         ]);
 
         if (!$updateResult) {
@@ -3097,7 +3311,241 @@ class PortalService
             'ok' => true,
             'workflow' => $workflow,
             'reviewedAt' => $workflow['reviewedAt'],
+            'quote' => $quote,
+            'message' => __('Review completed. Acceptance has been enabled.', 'cheapalarms'),
         ];
+    }
+
+    /**
+     * Request changes to photos (admin action)
+     * Keeps workflow in 'under_review' status, marks photos as reviewed but doesn't enable acceptance
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param string $note Optional note for customer
+     * @return array|WP_Error
+     */
+    public function requestChanges(string $estimateId, string $locationId = '', string $note = ''): array|WP_Error
+    {
+        if (!$estimateId) {
+            return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
+        }
+
+        $locationId = $locationId ?: $this->config->getLocationId();
+        $meta = $this->getMeta($estimateId);
+        $workflow = $meta['workflow'] ?? [];
+        $quote = $meta['quote'] ?? [];
+        $photos = $meta['photos'] ?? [];
+        
+        // Validate workflow status
+        if (($workflow['status'] ?? null) !== 'under_review') {
+            return new WP_Error(
+                'invalid_status',
+                sprintf(
+                    __('Cannot request changes. Estimate is in "%s" status, expected "under_review".', 'cheapalarms'),
+                    $workflow['status'] ?? 'unknown'
+                ),
+                ['status' => 400]
+            );
+        }
+        
+        // Validate review was requested
+        if (empty($quote['approval_requested'])) {
+            return new WP_Error(
+                'review_not_requested',
+                __('Cannot request changes. Customer has not requested review yet.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // Validate photos were submitted (if required)
+        if (!empty($quote['photos_required'])) {
+            if (($photos['submission_status'] ?? '') !== 'submitted') {
+                return new WP_Error(
+                    'photos_not_submitted',
+                    __('Cannot request changes. Photos must be submitted first.', 'cheapalarms'),
+                    ['status' => 400]
+                );
+            }
+        }
+        
+        // Validate acceptance not already enabled
+        if (!empty($quote['acceptance_enabled'])) {
+            return new WP_Error(
+                'acceptance_already_enabled',
+                __('Cannot request changes. Acceptance has already been enabled.', 'cheapalarms'),
+                ['status' => 400]
+            );
+        }
+        
+        // Clear submission status to allow resubmission
+        // Reset reviewed flag so new submission needs to be reviewed
+        if (!empty($quote['photos_required'])) {
+            $photos['submission_status'] = null;
+            $photos['submitted_at'] = null;
+            $photos['reviewed'] = false;
+            $photos['reviewed_at'] = null;
+            $photos['reviewed_by'] = null;
+        }
+        
+        // Reset approval_requested so customer can request review again after resubmission
+        $quote['approval_requested'] = false;
+        
+        // Transition workflow back to 'sent' so customer can request review again after resubmission
+        $workflow['status'] = 'sent';
+        $workflow['reviewedAt'] = current_time('mysql');
+        
+        // Store note if provided
+        if ($note) {
+            $quote['change_request_note'] = sanitize_text_field($note);
+            $quote['change_requested_at'] = current_time('mysql');
+            $quote['change_requested_by'] = get_current_user_id() ?: 1;
+        }
+        
+        // Update meta
+        $updateResult = $this->updateMeta($estimateId, [
+            'workflow' => $workflow,
+            'quote' => $quote,
+            'photos' => $photos,
+        ]);
+        
+        if (!$updateResult) {
+            return new WP_Error(
+                'update_failed',
+                __('Failed to update workflow status.', 'cheapalarms'),
+                ['status' => 500]
+            );
+        }
+        
+        $this->logger->info('Changes requested', [
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+            'note' => $note ? 'provided' : 'not provided',
+        ]);
+        
+        // Send notification email to customer
+        if ($locationId) {
+            $this->sendChangesRequestedEmail($estimateId, $locationId, $quote, $note);
+        }
+        
+        return [
+            'ok' => true,
+            'message' => __('Changes requested. Customer can resubmit photos.', 'cheapalarms'),
+            'workflow' => $workflow,
+        ];
+    }
+
+    /**
+     * Send changes requested email to customer
+     * Notifies customer when admin requests changes to their photos
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array $quote Quote data (contains change_request_note if provided)
+     * @param string $note Admin's note (if provided)
+     * @return void
+     */
+    private function sendChangesRequestedEmail(string $estimateId, string $locationId, array $quote, string $note = ''): void
+    {
+        try {
+            // Get estimate to fetch contact details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for changes requested email', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $email = sanitize_email($contact['email'] ?? '');
+            if (empty($email)) {
+                $this->logger->warning('No email address for changes requested email', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $portalUrl = $this->resolvePortalUrl($estimateId);
+            
+            // Get admin's note (from parameter or stored in quote meta)
+            $adminNote = $note ?: ($quote['change_request_note'] ?? '');
+            $hasNote = !empty($adminNote);
+            $photosRequired = !empty($quote['photos_required']);
+
+            $subject = sprintf(__('Update needed for Estimate #%s', 'cheapalarms'), $estimateNumber);
+
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            
+            $body .= '<p>' . esc_html(__('We\'ve reviewed your estimate and need a few updates before we can proceed.', 'cheapalarms')) . '</p>';
+            
+            if ($photosRequired) {
+                $body .= '<p>' . esc_html(__('We need some additional or updated photos of your installation area.', 'cheapalarms')) . '</p>';
+            } else {
+                $body .= '<p>' . esc_html(__('We need some additional information to finalize your estimate.', 'cheapalarms')) . '</p>';
+            }
+            
+            // Include admin's note if provided
+            if ($hasNote) {
+                $body .= '<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 4px;">';
+                $body .= '<p style="margin: 0 0 8px 0; font-weight: bold; color: #92400e;">' . esc_html(__('Note from our team:', 'cheapalarms')) . '</p>';
+                $body .= '<p style="margin: 0; color: #78350f;">' . nl2br(esc_html($adminNote)) . '</p>';
+                $body .= '</div>';
+            }
+            
+            $body .= '<p>' . esc_html(__('What you need to do:', 'cheapalarms')) . '</p>';
+            $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+            if ($photosRequired) {
+                $body .= '<li>' . esc_html(__('Review the note above for specific photo requirements', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Upload the additional or updated photos in your portal', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Submit your photos for review again', 'cheapalarms')) . '</li>';
+            } else {
+                $body .= '<li>' . esc_html(__('Review the note above for specific requirements', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Update your information in the portal', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Request a review again when ready', 'cheapalarms')) . '</li>';
+            }
+            $body .= '</ul>';
+
+            $body .= '<p>' . esc_html(__('You can access your portal and make the updates here:', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+
+            $body .= '<p>' . esc_html(__('If you have any questions or need clarification, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+            // Send via GHL
+            $contactId = $contact['id'] ?? null;
+            $sent = false;
+            
+            if ($contactId) {
+                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            } else {
+                $this->logger->warning('No GHL contact ID for changes requested email, cannot send via GHL', [
+                    'estimateId' => $estimateId,
+                    'email' => $email,
+                ]);
+            }
+
+            $this->logger->info('Changes requested email sent via GHL', [
+                'estimateId' => $estimateId,
+                'contactId' => $contactId,
+                'sent' => $sent,
+                'hasNote' => $hasNote,
+                'photosRequired' => $photosRequired,
+            ]);
+        } catch (\Exception $e) {
+            // Don't fail request changes if email fails
+            $this->logger->error('Failed to send changes requested email', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -3324,6 +3772,121 @@ class PortalService
     }
 
     /**
+     * Send review request notification to admin
+     * Notifies admin when customer requests review of their estimate
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $locationId Location ID
+     * @param array $quote Quote data
+     * @param array $photos Photos data
+     * @return void
+     */
+    private function sendReviewRequestNotificationToAdmin(string $estimateId, string $locationId, array $quote, array $photos): void
+    {
+        try {
+            // Get estimate to fetch customer details
+            $estimate = $this->estimateService->getEstimate([
+                'estimateId' => $estimateId,
+                'locationId' => $locationId,
+            ]);
+
+            if (is_wp_error($estimate)) {
+                $this->logger->warning('Could not fetch estimate for admin review notification', [
+                    'estimateId' => $estimateId,
+                    'error' => $estimate->get_error_message(),
+                ]);
+                return;
+            }
+
+            // Get admin email
+            $adminEmail = get_option('admin_email');
+            if (empty($adminEmail)) {
+                $this->logger->warning('No admin email configured for review request notification', [
+                    'estimateId' => $estimateId,
+                ]);
+                return;
+            }
+
+            $contact = $estimate['contact'] ?? [];
+            $customerName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
+            $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
+            $photosRequired = !empty($quote['photos_required']);
+            $photosUploaded = $photos['uploaded'] ?? 0;
+            $photosSubmitted = ($photos['submission_status'] ?? '') === 'submitted';
+            
+            // Admin dashboard URL (pointing to Next.js frontend)
+            $adminUrl = $this->config->getFrontendUrl() . '/admin/estimates/' . $estimateId;
+
+            $subject = sprintf('[CheapAlarms] Review Requested for Estimate #%s', $estimateNumber);
+            $headers = ['Content-Type: text/html; charset=UTF-8'];
+
+            $body = '<h2>🔍 Review Requested</h2>';
+            $body .= '<p><strong>Customer:</strong> ' . esc_html($customerName) . '</p>';
+            $body .= '<p><strong>Estimate:</strong> #' . esc_html($estimateNumber) . '</p>';
+            $body .= '<p><strong>Requested:</strong> ' . current_time('F j, Y g:i A') . '</p>';
+            
+            if ($photosRequired) {
+                $body .= '<hr>';
+                $body .= '<p><strong>Photos Status:</strong></p>';
+                $body .= '<ul>';
+                $body .= '<li>Photos required: Yes</li>';
+                $body .= '<li>Photos uploaded: ' . $photosUploaded . '</li>';
+                $body .= '<li>Photos submitted: ' . ($photosSubmitted ? 'Yes' : 'No') . '</li>';
+                $body .= '</ul>';
+                
+                if ($photosSubmitted) {
+                    $body .= '<p style="color: #1EA6DF; font-weight: bold;">✓ Customer has submitted photos for review</p>';
+                } else {
+                    $body .= '<p style="color: #c95375; font-weight: bold;">⚠ Photos uploaded but not yet submitted</p>';
+                }
+            } else {
+                $body .= '<p><strong>Photos required:</strong> No</p>';
+            }
+            
+            $body .= '<hr>';
+            $body .= '<p>The customer has requested a review of their estimate. Please:</p>';
+            $body .= '<ol>';
+            if ($photosRequired && $photosSubmitted) {
+                $body .= '<li>Review all submitted photos in the admin panel</li>';
+                $body .= '<li>Verify pricing is accurate (adjust estimate if needed)</li>';
+                $body .= '<li>Approve photos and enable acceptance, OR request changes if needed</li>';
+            } else {
+                $body .= '<li>Review the estimate details</li>';
+                $body .= '<li>Verify pricing is accurate (adjust estimate if needed)</li>';
+                $body .= '<li>Enable acceptance for the customer</li>';
+            }
+            $body .= '</ol>';
+            $body .= '<p><a href="' . esc_url($adminUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #1EA6DF; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Review Estimate in Admin Panel</a></p>';
+            $body .= '<hr>';
+            $body .= '<p style="color: #666; font-size: 12px;">This is an automated notification from CheapAlarms Customer Portal.</p>';
+
+            $sent = wp_mail($adminEmail, $subject, $body, $headers);
+
+            if ($sent) {
+                $this->logger->info('Admin review request notification sent', [
+                    'estimateId' => $estimateId,
+                    'photosRequired' => $photosRequired,
+                    'photosUploaded' => $photosUploaded,
+                    'photosSubmitted' => $photosSubmitted,
+                    'adminEmail' => $adminEmail,
+                ]);
+            } else {
+                $this->logger->warning('Failed to send admin review request notification', [
+                    'estimateId' => $estimateId,
+                    'adminEmail' => $adminEmail,
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            // Don't fail review request if email fails
+            $this->logger->error('Exception sending admin review notification', [
+                'estimateId' => $estimateId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Store estimate revision data in portal meta
      * Used when admin edits estimate based on customer photos
      * 
@@ -3351,8 +3914,9 @@ class PortalService
     }
 
     /**
-     * Auto-transition workflow from "reviewing" to "reviewed" if conditions are met
+     * Auto-transition workflow for legacy statuses (backward compatibility)
      * Called after estimate update when revision data is provided
+     * NOTE: This method handles legacy 'reviewing' and 'reviewed' statuses
      * 
      * @param string $estimateId
      * @return bool True if transition occurred, false otherwise
@@ -3362,14 +3926,30 @@ class PortalService
         $meta = $this->getMeta($estimateId);
         $workflow = $meta['workflow'] ?? [];
         $photos = $meta['photos'] ?? [];
+        $quote = $meta['quote'] ?? [];
+        $transitioned = false;
         
-        // If workflow is "reviewing" and photos are submitted, transition to "reviewed"
-        if (($workflow['status'] ?? '') === 'reviewing' && 
-            ($photos['submission_status'] ?? '') === 'submitted') {
+        // Legacy: If workflow is "reviewing" (old status), transition to "under_review" (new status)
+        if (($workflow['status'] ?? '') === 'reviewing') {
+            $workflow['status'] = 'under_review';
+            $workflow['currentStep'] = 2;
+            $transitioned = true;
+        }
+        
+        // Legacy: If workflow is "reviewed" (old status), transition to "ready_to_accept" (new status)
+        if (($workflow['status'] ?? '') === 'reviewed') {
+            $workflow['status'] = 'ready_to_accept';
+            $workflow['currentStep'] = 2;
             
-            $workflow['status'] = 'reviewed';
-            $workflow['currentStep'] = 2; // Still step 2 (Review step)
-            
+            // Enable acceptance if not already enabled
+            if (empty($quote['acceptance_enabled'])) {
+                $quote['acceptance_enabled'] = true;
+                $quote['enabled_at'] = current_time('mysql');
+            }
+            $transitioned = true;
+        }
+        
+        if ($transitioned) {
             // Update reviewedAt timestamp if not already set
             if (empty($workflow['reviewedAt'])) {
                 $workflow['reviewedAt'] = current_time('mysql');
@@ -3380,10 +3960,13 @@ class PortalService
                 $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
             }
             
-            $result = $this->updateMeta($estimateId, ['workflow' => $workflow]);
+            $result = $this->updateMeta($estimateId, [
+                'workflow' => $workflow,
+                'quote' => $quote,
+            ]);
             
             if ($result) {
-                $this->logger->info('Workflow auto-transitioned to reviewed after estimate update', [
+                $this->logger->info('Workflow auto-transitioned from legacy status after estimate update', [
                     'estimateId' => $estimateId,
                     'reviewedAt' => $workflow['reviewedAt'],
                 ]);

@@ -250,6 +250,46 @@ class PortalController implements ControllerInterface
             },
         ]);
 
+        register_rest_route('ca/v1', '/portal/request-review', [
+            'methods'             => 'POST',
+            'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),
+            'callback'            => function (WP_REST_Request $request) {
+                $payload    = $request->get_json_params();
+                $estimateId = sanitize_text_field($payload['estimateId'] ?? '');
+                $locationId = sanitize_text_field($payload['locationId'] ?? '');
+                $inviteToken = sanitize_text_field($payload['inviteToken'] ?? '');
+                
+                // Input validation
+                if (empty($estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('estimateId is required', 'cheapalarms'), ['status' => 400]));
+                }
+                if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+                    return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
+                }
+                
+                // Block guest mode (read-only access)
+                global $current_user;
+                $current_user = null;
+                $user = wp_get_current_user();
+                if ($inviteToken && (!$user || 0 === $user->ID)) {
+                    return $this->respond(new WP_Error(
+                        'guest_mode_blocked',
+                        __('Please create an account to request review. Guest access is read-only.', 'cheapalarms'),
+                        ['status' => 403, 'requiresAccount' => true]
+                    ));
+                }
+                
+                // SECURITY: Verify user has access to this estimate
+                $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
+                if (is_wp_error($status)) {
+                    return $this->respond($status);
+                }
+                
+                $result = $this->service->requestReview($estimateId, $locationId);
+                return $this->respond($result);
+            },
+        ]);
+
         register_rest_route('ca/v1', '/portal/create-invoice', [
             'methods'             => 'POST',
             'permission_callback' => fn (WP_REST_Request $request) => $allowPortalOrInvite($request) && $requireCsrf($request),

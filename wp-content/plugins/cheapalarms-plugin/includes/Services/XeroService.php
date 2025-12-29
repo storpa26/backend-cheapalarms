@@ -539,13 +539,14 @@ class XeroService
 
     /**
      * Create or update contact in Xero
+     * Handles duplicate name errors by searching by name and making names unique when needed
      * 
      * @param array $contactData Contact information
      * @return array|WP_Error
      */
     public function upsertContact(array $contactData)
     {
-        // Check if contact exists by email
+        // Validate email
         $email = trim($contactData['email'] ?? '');
         if (empty($email)) {
             return new WP_Error('missing_email', __('Contact email is required.', 'cheapalarms'), ['status' => 400]);
@@ -556,29 +557,296 @@ class XeroService
             return new WP_Error('invalid_email', __('Invalid email address format.', 'cheapalarms'), ['status' => 400]);
         }
 
-        // Search for existing contact using Xero's OData WHERE clause
-        // Xero uses OData query syntax: where=EmailAddress="value"
-        // We need to properly escape the email value for OData (double quotes in OData)
-        // and URL-encode the entire WHERE clause parameter
-        $escapedEmail = str_replace('"', '""', $email); // OData escape: double quotes
-        $whereClause = 'EmailAddress="' . $escapedEmail . '"';
-        $searchResult = $this->makeRequest('GET', '/Contacts?where=' . urlencode($whereClause));
-        if (is_wp_error($searchResult)) {
-            return $searchResult;
-        }
-
-        $existingContact = null;
-        if (!empty($searchResult['Contacts']) && count($searchResult['Contacts']) > 0) {
-            $existingContact = $searchResult['Contacts'][0];
-        }
-
-        // Validate and prepare contact data for Xero
         $contactName = trim($contactData['name'] ?? '');
         if (empty($contactName)) {
             $contactName = 'Unknown';
         }
+
+        // Step 1: Try to find by email (don't fail if search fails - continue to create)
+        $existingContact = null;
+        $escapedEmail = str_replace('"', '""', $email); // OData escape: double quotes
+        $whereClause = 'EmailAddress="' . $escapedEmail . '"';
+        $searchResult = $this->makeRequest('GET', '/Contacts?where=' . urlencode($whereClause));
         
-        // Xero requires Name field, ensure it's not empty
+        // Don't abort on search failure - continue to create (will handle duplicate error if contact exists)
+        if (!is_wp_error($searchResult) && !empty($searchResult['Contacts']) && count($searchResult['Contacts']) > 0) {
+            $existingContact = $searchResult['Contacts'][0];
+        }
+
+        // Step 2: Prepare contact data
+        $xeroContact = $this->prepareContactData($contactData, $contactName, $email);
+        
+        // Step 3: Execute operation
+        if ($existingContact) {
+            // Update existing contact
+            $existingName = $existingContact['Name'] ?? '';
+            
+            // Prevent name conflict on update - check if new name would conflict
+            if ($existingName !== $contactName) {
+                $nameConflict = $this->findContactByName($contactName);
+                if ($nameConflict && ($nameConflict['ContactID'] ?? '') !== ($existingContact['ContactID'] ?? '')) {
+                    // Name conflict - keep existing name to avoid duplicate error
+                    $xeroContact['Name'] = $existingName;
+                    $this->logger->info('Name conflict detected on update, preserving existing contact name', [
+                        'contactId' => $existingContact['ContactID'],
+                        'existingName' => $existingName,
+                        'requestedName' => $contactName,
+                    ]);
+                }
+            }
+            
+            $xeroContact['ContactID'] = $existingContact['ContactID'];
+            $result = $this->makeRequest('POST', '/Contacts', ['Contacts' => [$xeroContact]]);
+            
+            // Handle duplicate name error on update (rare but possible)
+            if (is_wp_error($result) && $this->isDuplicateNameError($result)) {
+                $this->logger->warning('Duplicate name error on update, retrying with existing name', [
+                    'contactId' => $existingContact['ContactID'],
+                    'existingName' => $existingName,
+                ]);
+                // Keep existing name and retry
+                $xeroContact['Name'] = $existingName;
+                $result = $this->makeRequest('POST', '/Contacts', ['Contacts' => [$xeroContact]]);
+            }
+        } else {
+            // Try to create new contact
+            $result = $this->makeRequest('PUT', '/Contacts', ['Contacts' => [$xeroContact]]);
+            
+            // Step 4: Handle duplicate name error on create
+            if (is_wp_error($result) && $this->isDuplicateNameError($result)) {
+                $this->logger->info('Duplicate name error detected, searching by name', [
+                    'name' => $contactName,
+                    'email' => $email,
+                ]);
+                
+                // Search by name to find existing contact
+                $existingByName = $this->findContactByName($contactName);
+                
+                if ($existingByName) {
+                    // Found contact with same name - check if it's the same person
+                    $existingEmail = strtolower(trim($existingByName['EmailAddress'] ?? ''));
+                    $requestedEmail = strtolower(trim($email));
+                    
+                    if ($existingEmail === $requestedEmail || empty($existingEmail)) {
+                        // Same person or email missing - update existing contact
+                        $this->logger->info('Found existing contact by name with matching/empty email, updating', [
+                            'contactId' => $existingByName['ContactID'],
+                            'name' => $contactName,
+                            'email' => $email,
+                        ]);
+                        
+                        $xeroContact['ContactID'] = $existingByName['ContactID'];
+                        $xeroContact['EmailAddress'] = $email; // Ensure email is set
+                        $result = $this->makeRequest('POST', '/Contacts', ['Contacts' => [$xeroContact]]);
+                    } else {
+                        // Different person with same name - make name unique
+                        $this->logger->info('Different person with same name, making name unique', [
+                            'existingEmail' => $existingEmail,
+                            'newEmail' => $requestedEmail,
+                            'name' => $contactName,
+                        ]);
+                        
+                        $uniqueName = $this->makeNameUnique($contactName, $email);
+                        $xeroContact['Name'] = $uniqueName;
+                        $result = $this->makeRequest('PUT', '/Contacts', ['Contacts' => [$xeroContact]]);
+                        
+                        // If still fails, try numbered suffix
+                        if (is_wp_error($result) && $this->isDuplicateNameError($result)) {
+                            $result = $this->retryWithNumberedSuffix($xeroContact, $contactName, $email);
+                        }
+                    }
+                } else {
+                    // Name conflict but contact not found - make name unique
+                    $this->logger->warning('Duplicate name error but contact not found, making name unique', [
+                        'name' => $contactName,
+                        'email' => $email,
+                    ]);
+                    
+                    $uniqueName = $this->makeNameUnique($contactName, $email);
+                    $xeroContact['Name'] = $uniqueName;
+                    $result = $this->makeRequest('PUT', '/Contacts', ['Contacts' => [$xeroContact]]);
+                    
+                    // If still fails, try numbered suffix
+                    if (is_wp_error($result) && $this->isDuplicateNameError($result)) {
+                        $result = $this->retryWithNumberedSuffix($xeroContact, $contactName, $email);
+                    }
+                }
+            }
+        }
+
+        // Step 5: Final verification
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        $contact = $result['Contacts'][0] ?? null;
+        if (!$contact) {
+            return new WP_Error('contact_creation_failed', __('Failed to create/update contact in Xero.', 'cheapalarms'), ['status' => 500]);
+        }
+
+        return [
+            'ok' => true,
+            'contact' => $contact,
+            'contactId' => $contact['ContactID'],
+        ];
+    }
+
+    /**
+     * Find contact by exact name match
+     * 
+     * @param string $name Contact name to search for
+     * @return array|null Contact data or null if not found
+     */
+    private function findContactByName(string $name): ?array
+    {
+        try {
+            $escapedName = str_replace('"', '""', $name); // OData escape: double quotes
+            $whereClause = 'Name="' . $escapedName . '"';
+            $searchResult = $this->makeRequest('GET', '/Contacts?where=' . urlencode($whereClause));
+            
+            if (!is_wp_error($searchResult) && !empty($searchResult['Contacts'])) {
+                return $searchResult['Contacts'][0];
+            }
+        } catch (\Exception $e) {
+            $this->logger->warning('Name search failed', [
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
+        }
+        return null;
+    }
+
+    /**
+     * Make contact name unique by appending email-based suffix
+     * 
+     * @param string $baseName Original contact name
+     * @param string $email Contact email (used for suffix)
+     * @return string Unique name within Xero limits (150 chars)
+     */
+    private function makeNameUnique(string $baseName, string $email): string
+    {
+        // Use last 4 chars of email username as suffix (more readable than MD5)
+        $emailParts = explode('@', $email);
+        $emailUsername = $emailParts[0] ?? '';
+        $suffix = !empty($emailUsername) && strlen($emailUsername) >= 4 
+            ? substr($emailUsername, -4) 
+            : substr(md5($email), 0, 4);
+        
+        // Ensure name fits within Xero limits (150 chars conservative)
+        $maxLength = 150;
+        $suffixWithParens = " ({$suffix})";
+        $suffixLength = strlen($suffixWithParens);
+        $maxBaseLength = $maxLength - $suffixLength;
+        
+        if (strlen($baseName) > $maxBaseLength) {
+            $baseName = substr($baseName, 0, $maxBaseLength - 3) . '...';
+        }
+        
+        return $baseName . $suffixWithParens;
+    }
+
+    /**
+     * Retry contact creation with numbered suffix (1), (2), etc.
+     * 
+     * @param array $xeroContact Contact data array
+     * @param string $baseName Original contact name
+     * @param string $email Contact email
+     * @return array|WP_Error Result from Xero API
+     */
+    private function retryWithNumberedSuffix(array $xeroContact, string $baseName, string $email): WP_Error|array
+    {
+        $maxAttempts = 10;
+        
+        for ($counter = 1; $counter <= $maxAttempts; $counter++) {
+            $uniqueName = $baseName . ' (' . $counter . ')';
+            
+            // Ensure name fits within 150 char limit
+            if (strlen($uniqueName) > 150) {
+                $maxBaseLength = 150 - strlen(' (' . $counter . ')');
+                $uniqueName = substr($baseName, 0, $maxBaseLength - 3) . '... (' . $counter . ')';
+            }
+            
+            $xeroContact['Name'] = $uniqueName;
+            $result = $this->makeRequest('PUT', '/Contacts', ['Contacts' => [$xeroContact]]);
+            
+            // If success, return immediately
+            if (!is_wp_error($result)) {
+                $this->logger->info('Successfully created contact with numbered suffix', [
+                    'attempt' => $counter,
+                    'uniqueName' => $uniqueName,
+                ]);
+                return $result;
+            }
+            
+            // If error but not duplicate name error, return the error
+            if (!$this->isDuplicateNameError($result)) {
+                return $result;
+            }
+            
+            // If duplicate name error, continue loop to try next number
+        }
+        
+        $this->logger->error('Failed to create contact after all retry attempts', [
+            'baseName' => $baseName,
+            'email' => $email,
+            'attempts' => $maxAttempts,
+        ]);
+        
+        return new WP_Error(
+            'contact_creation_failed',
+            __('Failed to create contact after multiple attempts. Please try again.', 'cheapalarms'),
+            ['status' => 500]
+        );
+    }
+
+    /**
+     * Check if error is a duplicate name error from Xero
+     * 
+     * @param WP_Error $error Error object to check
+     * @return bool True if duplicate name error
+     */
+    private function isDuplicateNameError(WP_Error $error): bool
+    {
+        $errorMessage = strtolower($error->get_error_message());
+        $errorData = $error->get_error_data();
+        
+        // Safely extract validation errors (errorData can be null or non-array)
+        $validationErrors = [];
+        if (is_array($errorData) && isset($errorData['validation_errors']) && is_array($errorData['validation_errors'])) {
+            $validationErrors = $errorData['validation_errors'];
+        }
+        
+        // Check validation errors for duplicate name
+        foreach ($validationErrors as $validationError) {
+            if (!is_string($validationError)) {
+                continue;
+            }
+            $lowerError = strtolower($validationError);
+            if ((stripos($lowerError, 'duplicate') !== false && stripos($lowerError, 'name') !== false) ||
+                stripos($lowerError, 'already exists') !== false) {
+                return true;
+            }
+        }
+        
+        // Check main error message
+        if (stripos($errorMessage, 'duplicate') !== false || 
+            stripos($errorMessage, 'already exists') !== false) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Prepare contact data for Xero API
+     * 
+     * @param array $contactData Contact information from GHL
+     * @param string $contactName Contact name
+     * @param string $email Contact email
+     * @return array Xero contact data array
+     */
+    private function prepareContactData(array $contactData, string $contactName, string $email): array
+    {
         $xeroContact = [
             'Name' => $contactName,
             'EmailAddress' => $email,
@@ -643,32 +911,8 @@ class XeroService
                 ]);
             }
         }
-
-        if ($existingContact) {
-            // Update existing contact
-            // Xero API: POST /Contacts with ContactID in body updates the contact
-            $xeroContact['ContactID'] = $existingContact['ContactID'];
-            $result = $this->makeRequest('POST', '/Contacts', ['Contacts' => [$xeroContact]]);
-        } else {
-            // Create new contact
-            // Xero API: PUT /Contacts creates a new contact
-            $result = $this->makeRequest('PUT', '/Contacts', ['Contacts' => [$xeroContact]]);
-        }
-
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        $contact = $result['Contacts'][0] ?? null;
-        if (!$contact) {
-            return new WP_Error('contact_creation_failed', __('Failed to create/update contact in Xero.', 'cheapalarms'), ['status' => 500]);
-        }
-
-        return [
-            'ok' => true,
-            'contact' => $contact,
-            'contactId' => $contact['ContactID'],
-        ];
+        
+        return $xeroContact;
     }
 
     /**

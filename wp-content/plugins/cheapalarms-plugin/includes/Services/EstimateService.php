@@ -564,20 +564,42 @@ class EstimateService
         $sendCount = ($portalMeta['quote']['sendCount'] ?? 0) + 1;
         $method = $options['method'] ?? 'email';
         
+        // Store estimate snapshot data for fast dashboard loading (no GHL calls needed)
+        $estimateNumber = $estimate['estimateNumber'] ?? $estimateId;
+        $estimateTotal = $estimate['total'] ?? 0;
+        $estimateCurrency = $estimate['currency'] ?? 'AUD';
+        
         // Update quote meta with sent tracking
+        // When resending, reset status to 'sent' to allow customer to review/accept again
+        // Only preserve 'rejected' status (customer explicitly rejected, don't reset)
         $quoteUpdate = array_merge($portalMeta['quote'] ?? [], [
             'sentAt' => $sentAt,
             'sendCount' => $sendCount,
             'lastSentMethod' => $method,
-            // Only update status to 'sent' if it's not already accepted/rejected
-            // This preserves acceptance/rejection status while tracking sends
-            'status' => in_array($quoteStatus, ['accepted', 'rejected']) ? $quoteStatus : 'sent',
-            'statusLabel' => in_array($quoteStatus, ['accepted', 'rejected']) 
-                ? ($portalMeta['quote']['statusLabel'] ?? 'Sent') 
+            // Reset to 'sent' unless explicitly rejected (allows re-review after acceptance)
+            'status' => ($quoteStatus === 'rejected') ? 'rejected' : 'sent',
+            'statusLabel' => ($quoteStatus === 'rejected') 
+                ? ($portalMeta['quote']['statusLabel'] ?? 'Rejected') 
                 : 'Sent',
+            'approval_requested' => false, // NEW: Reset approval request when resending
+            'acceptance_enabled' => false, // NEW: Reset acceptance enabled when resending
+            // Store estimate snapshot for fast dashboard loading
+            'number' => $estimateNumber,
+            'total' => $estimateTotal,
+            'currency' => $estimateCurrency,
+            'last_synced_at' => current_time('mysql'),
         ]);
         
-        $this->updatePortalMeta($estimateId, ['quote' => $quoteUpdate]);
+        // Update workflow status to 'sent' (NEW: Changed from 'reviewing' to 'sent')
+        $workflowUpdate = array_merge($portalMeta['workflow'] ?? [], [
+            'status' => 'sent',
+            'currentStep' => 2,
+        ]);
+        
+        $this->updatePortalMeta($estimateId, [
+            'quote' => $quoteUpdate,
+            'workflow' => $workflowUpdate,
+        ]);
 
         $this->logger->info('Estimate sent via portal system', [
             'estimateId' => $estimateId,

@@ -345,9 +345,10 @@ class QuoteRequestController implements ControllerInterface
                     'locationId' => $effectiveLocationId,
                 ],
                 'quote' => [
-                    'status' => 'sent',
-                    'statusLabel' => 'Sent',
+                    'status' => null, // Will be set to 'sent' after auto-send
+                    'statusLabel' => null,
                     'total' => null, // Will be populated when estimate is fetched
+                    'approval_requested' => false, // NEW: Customer hasn't requested review yet
                 ],
                 'workflow' => [
                     'status' => 'requested',
@@ -419,6 +420,56 @@ class QuoteRequestController implements ControllerInterface
                     'ok' => false,
                     'error' => 'Failed to save portal data. Please contact support.',
                 ], 500);
+            }
+
+            // Step 4: Automatically send estimate via GHL
+            try {
+                $sendResult = $this->estimateService->sendEstimate($estimateId, $effectiveLocationId, [
+                    'method' => 'email',
+                ]);
+                
+                if (is_wp_error($sendResult)) {
+                    // Log error but don't fail the request (estimate was created successfully)
+                    error_log('[CheapAlarms][WARNING] Failed to auto-send estimate after quote request: ' . $sendResult->get_error_message());
+                } else {
+                    // Update workflow status to 'sent' after successful send
+                    $stored = get_option("ca_portal_meta_{$estimateId}", '{}');
+                    $meta = json_decode($stored, true);
+                    if (is_array($meta)) {
+                        // Ensure workflow and quote arrays exist
+                        if (!isset($meta['workflow'])) {
+                            $meta['workflow'] = [];
+                        }
+                        if (!isset($meta['quote'])) {
+                            $meta['quote'] = [];
+                        }
+                        $meta['workflow']['status'] = 'sent';
+                        $meta['workflow']['currentStep'] = 2;
+                        $meta['quote']['status'] = 'sent';
+                        $meta['quote']['statusLabel'] = 'Sent';
+                        $meta['quote']['sentAt'] = current_time('mysql');
+                        $meta['quote']['sendCount'] = 1;
+                        $meta['quote']['approval_requested'] = false; // Ensure approval is not requested on send
+                        
+                        // Store estimate snapshot data for fast dashboard loading
+                        // Fetch estimate data to get number and total
+                        $estimateData = $this->estimateService->getEstimate([
+                            'estimateId' => $estimateId,
+                            'locationId' => $effectiveLocationId,
+                        ]);
+                        if (!is_wp_error($estimateData)) {
+                            $meta['quote']['number'] = $estimateData['estimateNumber'] ?? $estimateId;
+                            $meta['quote']['total'] = $estimateData['total'] ?? 0;
+                            $meta['quote']['currency'] = $estimateData['currency'] ?? 'AUD';
+                            $meta['quote']['last_synced_at'] = current_time('mysql');
+                        }
+                        
+                        update_option("ca_portal_meta_{$estimateId}", wp_json_encode($meta));
+                    }
+                }
+            } catch (\Exception $e) {
+                // Log but don't fail - estimate creation succeeded
+                error_log('[CheapAlarms][WARNING] Exception auto-sending estimate: ' . $e->getMessage());
             }
 
             // Send invitation email via GHL Conversations API

@@ -139,6 +139,25 @@ class AdminEstimateController extends AdminController
                 ],
             ],
         ]);
+
+        register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)/request-changes', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->requestChanges($request);
+            },
+            'args'                => [
+                'estimateId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
     }
 
     /**
@@ -157,16 +176,53 @@ class AdminEstimateController extends AdminController
         $portalStatus = sanitize_text_field($request->get_param('portalStatus') ?? '');
         
         // Validate workflow status filter against whitelist
-        $validWorkflowStatuses = ['requested', 'reviewing', 'reviewed', 'accepted', 'booked', 'paid', 'completed'];
+        $validWorkflowStatuses = ['requested', 'sent', 'under_review', 'ready_to_accept', 'accepted', 'rejected', 'booked', 'paid', 'completed'];
         $workflowStatusRaw = sanitize_text_field($request->get_param('workflowStatus') ?? '');
         $workflowStatus = in_array($workflowStatusRaw, $validWorkflowStatuses, true) ? $workflowStatusRaw : '';
         $page        = max(1, (int)($request->get_param('page') ?? 1));
         $pageSize    = max(1, min(100, (int)($request->get_param('pageSize') ?? 20)));
 
-        // Fetch estimates from GHL
-        $result = $this->estimateService->listEstimates($locationId, $pageSize * 2); // Fetch more for filtering
-        if (is_wp_error($result)) {
-            return $this->respond($result);
+        // Build cache key for the full GHL list for this location
+        // We cache the raw GHL result, then filter + paginate locally for correctness
+        $cacheKey = "ca_admin_estimates_ghl_full_{$locationId}";
+        
+        // Try to get cached full GHL list
+        $result = get_transient($cacheKey);
+        $cacheHit = ($result !== false);
+        
+        if ($cacheHit) {
+            // Debug logging: Cache HIT
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $itemCount = count($result['items'] ?? []);
+                error_log("[CheapAlarms][ADMIN_ESTIMATES] Cache HIT for location {$locationId} - using cached list of {$itemCount} estimates");
+            }
+        } else {
+            // Debug logging: Cache MISS - will call GHL
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $startTime = microtime(true);
+                error_log("[CheapAlarms][ADMIN_ESTIMATES] Cache MISS for location {$locationId} - fetching full list from GHL API");
+            }
+            
+            // Fetch ALL estimates from GHL for this location
+            // Note: EstimateService::listEstimates() has a max limit of 100
+            // For locations with > 100 estimates, we'd need to enhance EstimateService to support fetching all
+            // For MVP, this covers the common case (most locations have < 100 estimates)
+            $result = $this->estimateService->listEstimates($locationId, 100); // Max limit
+            
+            if (is_wp_error($result)) {
+                return $this->respond($result);
+            }
+            
+            // Cache the full GHL result for 3 minutes (180 seconds)
+            // Short TTL to balance freshness vs performance
+            set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
+            
+            // Debug logging: GHL call completed
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $duration = round((microtime(true) - $startTime) * 1000, 2);
+                $itemCount = count($result['items'] ?? []);
+                error_log("[CheapAlarms][ADMIN_ESTIMATES] GHL API call completed in {$duration}ms - fetched {$itemCount} estimates for location {$locationId} - cached for 3 minutes");
+            }
         }
 
         $items = $result['items'] ?? [];
@@ -200,11 +256,18 @@ class AdminEstimateController extends AdminController
                 $quoteStatus = $meta['quote']['status'] ?? 'sent';
                 $hasPhotos = !empty($meta['photos']['submission_status']) && $meta['photos']['submission_status'] === 'submitted';
                 
-                // Derive from existing data
+                // Derive from existing data (NEW: Updated workflow states)
                 if ($quoteStatus === 'accepted') {
                     $workflowStatusValue = 'accepted';
+                } elseif ($quoteStatus === 'rejected') {
+                    $workflowStatusValue = 'rejected';
+                } elseif ($quoteStatus === 'sent' && !empty($meta['quote']['acceptance_enabled'])) {
+                    // Check if acceptance is enabled (ready to accept)
+                    $workflowStatusValue = 'ready_to_accept';
                 } elseif ($hasPhotos && $quoteStatus === 'sent') {
-                    $workflowStatusValue = 'reviewing';
+                    // Check if review was requested
+                    $approvalRequested = $meta['quote']['approval_requested'] ?? false;
+                    $workflowStatusValue = $approvalRequested ? 'under_review' : 'sent';
                 } else {
                     $workflowStatusValue = 'requested';
                 }
@@ -283,7 +346,8 @@ class AdminEstimateController extends AdminController
             ];
         }
 
-        // Calculate summary totals from ALL estimates (before pagination)
+        // Calculate summary totals from ALL filtered estimates (before pagination)
+        // This is now correct because we have the full dataset (or at least the first 100)
         $summary = [
             'sent' => ['count' => 0, 'total' => 0.0],
             'accepted' => ['count' => 0, 'total' => 0.0],
@@ -320,7 +384,8 @@ class AdminEstimateController extends AdminController
             }
         }
 
-        // Apply pagination
+        // Apply pagination to filtered results
+        // Now $total is correct because it's from the full filtered dataset
         $total = count($out);
         $offset = max(0, ($page - 1) * $pageSize); // Ensure offset is non-negative
         $paginated = array_slice($out, $offset, $pageSize);
@@ -543,8 +608,8 @@ class AdminEstimateController extends AdminController
     }
 
     /**
-     * Complete review for an estimate
-     * Transitions workflow from "reviewing" to "reviewed"
+     * Complete review for an estimate (Approve & Enable Acceptance)
+     * Transitions workflow from "under_review" to "ready_to_accept"
      */
     public function completeReview(WP_REST_Request $request): WP_REST_Response
     {
@@ -565,6 +630,34 @@ class AdminEstimateController extends AdminController
         }
 
         $result = $this->portalService->completeReview($estimateId, $locationId, $options);
+
+        return $this->respond($result);
+    }
+
+    /**
+     * Request changes to photos (admin action)
+     */
+    public function requestChanges(WP_REST_Request $request): WP_REST_Response
+    {
+        $estimateId = sanitize_text_field($request->get_param('estimateId'));
+        $locationId = sanitize_text_field($request->get_param('locationId') ?? '');
+
+        if (empty($estimateId)) {
+            return $this->respond(new WP_Error('missing_estimate_id', __('Estimate ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $options = [];
+        $body = $request->get_json_params();
+        if (is_array($body)) {
+            $options = $body;
+            if (isset($body['locationId']) && empty($locationId)) {
+                $locationId = sanitize_text_field($body['locationId']);
+            }
+        }
+
+        $note = sanitize_text_field($body['note'] ?? '');
+
+        $result = $this->portalService->requestChanges($estimateId, $locationId, $note);
 
         return $this->respond($result);
     }

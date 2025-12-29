@@ -17,6 +17,8 @@ use function sanitize_text_field;
 use function email_exists;
 use function wp_get_attachment_url;
 use function wp_get_current_user;
+use function get_transient;
+use function set_transient;
 use Throwable;
 
 class EstimateController implements ControllerInterface
@@ -139,11 +141,50 @@ class EstimateController implements ControllerInterface
             'permission_callback' => fn () => $this->auth->requireCapability('ca_view_estimates'),
             'callback'            => function (WP_REST_Request $request) {
                 $this->auth->ensureConfigured();
-                $result = $this->service->listEstimates(
-                    sanitize_text_field($request->get_param('locationId')),
-                    (int)$request->get_param('limit'),
-                    (int)$request->get_param('raw')
-                );
+                
+                $locationId = sanitize_text_field($request->get_param('locationId'));
+                $limit = (int)$request->get_param('limit') ?: 20;
+                $raw = (int)$request->get_param('raw');
+                
+                // Build cache key (include locationId, limit, and raw flag for correctness)
+                $cacheKey = "ca_estimate_list_{$locationId}_{$limit}_{$raw}";
+                
+                // Try to get cached result
+                $result = get_transient($cacheKey);
+                $cacheHit = ($result !== false);
+                
+                if ($cacheHit) {
+                    // Debug logging: Cache HIT
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        $itemCount = count($result['items'] ?? []);
+                        error_log("[CheapAlarms][ESTIMATE_LIST] Cache HIT for location {$locationId}, limit {$limit}, raw {$raw} - using cached list of {$itemCount} estimates");
+                    }
+                } else {
+                    // Debug logging: Cache MISS - will call GHL
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        $startTime = microtime(true);
+                        error_log("[CheapAlarms][ESTIMATE_LIST] Cache MISS for location {$locationId}, limit {$limit}, raw {$raw} - fetching from GHL API");
+                    }
+                    
+                    // Fetch from GHL (expensive operation)
+                    $result = $this->service->listEstimates($locationId, $limit, $raw);
+                    
+                    if (is_wp_error($result)) {
+                        return $this->respond($result, $request);
+                    }
+                    
+                    // Cache the GHL result for 3 minutes (180 seconds)
+                    // Short TTL to balance freshness vs performance
+                    set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
+                    
+                    // Debug logging: GHL call completed
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        $duration = round((microtime(true) - $startTime) * 1000, 2);
+                        $itemCount = count($result['items'] ?? []);
+                        error_log("[CheapAlarms][ESTIMATE_LIST] GHL API call completed in {$duration}ms - fetched {$itemCount} estimates for location {$locationId} - cached for 3 minutes");
+                    }
+                }
+                
                 return $this->respond($result, $request);
             },
         ]);
