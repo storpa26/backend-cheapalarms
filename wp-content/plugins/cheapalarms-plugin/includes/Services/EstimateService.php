@@ -170,6 +170,44 @@ class EstimateService
     }
 
     /**
+     * Fetch ONE page from GHL estimate list endpoint (used for snapshot syncing).
+     *
+     * @return array{ok:bool, locationId:string, items:array<int, array<string,mixed>>, nextOffset:?string, raw:array<string,mixed>}|WP_Error
+     */
+    public function fetchEstimateListPage(string $locationId, int $limit = 50, string $offset = '0')
+    {
+        $locationId = $locationId ?: $this->config->getLocationId();
+        if (!$locationId) {
+            return new WP_Error('missing_location', __('Location ID is not configured.', 'cheapalarms'));
+        }
+
+        $limit = max(1, min(100, $limit));
+
+        $query = [
+            'altId'   => $locationId,
+            'altType' => 'location',
+            'limit'   => $limit,
+            'offset'  => (string)$offset,
+        ];
+
+        $response = $this->client->get('/invoices/estimate/list', $query);
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $records = $response['estimates'] ?? $response['items'] ?? [];
+        $next    = $response['nextOffset'] ?? ($response['meta']['nextOffset'] ?? null);
+
+        return [
+            'ok'         => true,
+            'locationId' => $locationId,
+            'items'      => is_array($records) ? $records : [],
+            'nextOffset' => $next ? (string)$next : null,
+            'raw'        => $response,
+        ];
+    }
+
+    /**
      * @return array|WP_Error
      */
     public function findByContactEmail(string $email, string $locationId, int $includeRaw = 0)

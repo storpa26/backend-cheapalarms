@@ -5,12 +5,15 @@ namespace CheapAlarms\Plugin;
 use CheapAlarms\Plugin\Admin\Menu;
 use CheapAlarms\Plugin\Admin\UserCapabilities;
 use CheapAlarms\Plugin\Config\Config;
+use CheapAlarms\Plugin\Db\Schema;
 use CheapAlarms\Plugin\Frontend\PortalPage;
 use CheapAlarms\Plugin\REST\ApiKernel;
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\Logger;
 use CheapAlarms\Plugin\Services\ProductRepository;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotRepository;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotSyncService;
 
 use function add_action;
 use function add_filter;
@@ -108,9 +111,17 @@ class Plugin
         if (function_exists('error_log')) {
             error_log('[CheapAlarms Plugin] bootstrap executing');
         }
+        // Run schema upgrades only when needed (versioned).
+        Schema::maybeMigrate();
         $this->registerRoles();
         $this->registerServices();
         $this->container->get(Authenticator::class)->boot();
+
+        // Background sync hook for estimate snapshots (WP-Cron).
+        add_action('ca_sync_estimate_snapshots', function (string $locationId) {
+            $this->container->get(EstimateSnapshotSyncService::class)->syncLocation($locationId);
+        }, 10, 1);
+
         $this->registerCors();
         $this->registerRestEndpoints();
         $this->registerFrontend();
@@ -192,6 +203,14 @@ class Plugin
             $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class),
             $this->container->get(Logger::class),
             $this->container->get(\CheapAlarms\Plugin\Services\Estimate\EstimateNormalizer::class)
+        ));
+
+        // Admin performance: snapshot storage for GHL estimates (avoids repeated GHL list calls).
+        $this->container->set(EstimateSnapshotRepository::class, fn () => new EstimateSnapshotRepository());
+        $this->container->set(EstimateSnapshotSyncService::class, fn () => new EstimateSnapshotSyncService(
+            $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
+            $this->container->get(EstimateSnapshotRepository::class),
+            $this->container->get(Logger::class)
         ));
         $this->container->set(\CheapAlarms\Plugin\Services\XeroService::class, fn () => new \CheapAlarms\Plugin\Services\XeroService(
             $this->container->get(Config::class),
@@ -287,6 +306,7 @@ class Plugin
 
     public function activate(): void
     {
+        Schema::maybeMigrate();
         $this->registerRoles();
         PortalPage::activate();
         flush_rewrite_rules();

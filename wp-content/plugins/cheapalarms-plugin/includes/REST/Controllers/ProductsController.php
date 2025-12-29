@@ -222,20 +222,20 @@ class ProductsController implements ControllerInterface
         $header = isset($_SERVER['HTTP_X_CA_DEV']) ? trim((string) $_SERVER['HTTP_X_CA_DEV']) : '';
         $query  = isset($_GET['__dev']) ? trim((string) $_GET['__dev']) : '';
         $addr = $_SERVER['REMOTE_ADDR'] ?? '';
+        // SECURITY: Never trust Host headers for "local" detection (can be spoofed behind proxies).
+        // Local bypass is ONLY allowed from loopback addresses and ONLY in WP_DEBUG.
         $isLocal = in_array($addr, ['127.0.0.1', '::1'], true);
-        // Also allow when Host header targets localhost
-        $host = $_SERVER['HTTP_HOST'] ?? '';
-        $isLocal = $isLocal || str_contains($host, 'localhost') || str_contains($host, '127.0.0.1');
+        $isDebug = defined('WP_DEBUG') && WP_DEBUG;
 
-        // Global switch for dev convenience (only from localhost)
-        if (defined('CA_DEV_BYPASS') && CA_DEV_BYPASS) {
+        // Global switch for dev convenience (only from localhost + debug)
+        if ($isLocal && $isDebug && defined('CA_DEV_BYPASS') && CA_DEV_BYPASS) {
             return true;
         }
 
-        if ($header === '1' && $isLocal) {
+        if ($isLocal && $isDebug && $header === '1') {
             return true;
         }
-        if ($query === '1' && $isLocal) {
+        if ($isLocal && $isDebug && $query === '1') {
             return true;
         }
         return false;

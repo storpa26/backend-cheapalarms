@@ -1,0 +1,28 @@
+# WordPress repo ignore rules (production-safe)
+
+# Core config (environment-specific)
+wp-config.php
+wp-config.*.php
+*.local.php
+
+# Secrets (plugin-local)
+**/config/secrets.php
+**/secrets.php
+
+# Runtime logs / caches / uploads
+wp-content/debug.log
+wp-content/cache/
+wp-content/upgrade/
+wp-content/uploads/
+
+# Local DB artifacts (e.g. SQLite dev plugins)
+wp-content/database/*.sqlite
+wp-content/database/*.db
+wp-content/database/.ht.sqlite
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+

@@ -4,6 +4,13 @@ namespace CheapAlarms\Plugin\Services;
 
 class Logger
 {
+    public function debug(string $message, array $context = []): void
+    {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->log('DEBUG', $message, $context);
+        }
+    }
+
     public function info(string $message, array $context = []): void
     {
         $this->log('INFO', $message, $context);

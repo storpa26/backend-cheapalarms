@@ -5,6 +5,8 @@ namespace CheapAlarms\Plugin\REST\Controllers;
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\REST\Controllers\Base\AdminController;
 use CheapAlarms\Plugin\Services\Container;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotRepository;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotSyncService;
 use CheapAlarms\Plugin\Services\EstimateService;
 use CheapAlarms\Plugin\Services\InvoiceService;
 use CheapAlarms\Plugin\Services\PortalService;
@@ -20,6 +22,8 @@ class AdminEstimateController extends AdminController
     private PortalService $portalService;
     private InvoiceService $invoiceService;
     private Authenticator $auth;
+    private EstimateSnapshotRepository $snapshotRepo;
+    private EstimateSnapshotSyncService $snapshotSync;
 
     public function __construct(Container $container)
     {
@@ -28,6 +32,8 @@ class AdminEstimateController extends AdminController
         $this->portalService   = $this->container->get(PortalService::class);
         $this->invoiceService  = $this->container->get(InvoiceService::class);
         $this->auth            = $this->container->get(Authenticator::class);
+        $this->snapshotRepo    = $this->container->get(EstimateSnapshotRepository::class);
+        $this->snapshotSync    = $this->container->get(EstimateSnapshotSyncService::class);
     }
 
     public function register(): void
@@ -158,6 +164,37 @@ class AdminEstimateController extends AdminController
                 ],
             ],
         ]);
+
+        // Non-blocking snapshot refresh for admin lists (WP-Cron).
+        register_rest_route('ca/v1', '/admin/estimates/sync-snapshots', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+
+                $locationIdResult = $this->resolveLocationId($request);
+                if (is_wp_error($locationIdResult)) {
+                    return $this->respond($locationIdResult);
+                }
+                $locationId = $locationIdResult;
+
+                $already = wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId]);
+                if (!$already) {
+                    wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
+                }
+
+                return $this->respond([
+                    'ok'              => true,
+                    'scheduled'       => $already ? false : true,
+                    'alreadyScheduled'=> $already ? true : false,
+                    'locationId'      => $locationId,
+                ]);
+            },
+        ]);
     }
 
     /**
@@ -182,50 +219,49 @@ class AdminEstimateController extends AdminController
         $page        = max(1, (int)($request->get_param('page') ?? 1));
         $pageSize    = max(1, min(100, (int)($request->get_param('pageSize') ?? 20)));
 
-        // Build cache key for the full GHL list for this location
-        // We cache the raw GHL result, then filter + paginate locally for correctness
-        $cacheKey = "ca_admin_estimates_ghl_full_{$locationId}";
-        
-        // Try to get cached full GHL list
-        $result = get_transient($cacheKey);
-        $cacheHit = ($result !== false);
-        
-        if ($cacheHit) {
-            // Debug logging: Cache HIT
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                $itemCount = count($result['items'] ?? []);
-                error_log("[CheapAlarms][ADMIN_ESTIMATES] Cache HIT for location {$locationId} - using cached list of {$itemCount} estimates");
+        // Prefer snapshot table (fast + scalable). Fall back to transient-cached GHL list if snapshots are empty/unavailable.
+        $items = null;
+        $snapshotItems = $this->snapshotRepo->listByLocation($locationId);
+
+        if (!is_wp_error($snapshotItems) && is_array($snapshotItems) && count($snapshotItems) > 0) {
+            $items = $snapshotItems;
+
+            // Best-effort background refresh if snapshots are stale.
+            $lastSyncedAt = $this->snapshotRepo->lastSyncedAt($locationId);
+            $stale = false;
+            if (!is_wp_error($lastSyncedAt) && is_string($lastSyncedAt) && $lastSyncedAt) {
+                $stale = (time() - (int)strtotime($lastSyncedAt)) > (3 * MINUTE_IN_SECONDS);
+            }
+            if ($stale && !wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId])) {
+                wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
             }
         } else {
-            // Debug logging: Cache MISS - will call GHL
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                $startTime = microtime(true);
-                error_log("[CheapAlarms][ADMIN_ESTIMATES] Cache MISS for location {$locationId} - fetching full list from GHL API");
+            // If snapshots are missing/empty, schedule a background sync and fall back to the current transient cache path.
+            if (!wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId])) {
+                wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
             }
-            
-            // Fetch ALL estimates from GHL for this location
-            // Note: EstimateService::listEstimates() has a max limit of 100
-            // For locations with > 100 estimates, we'd need to enhance EstimateService to support fetching all
-            // For MVP, this covers the common case (most locations have < 100 estimates)
-            $result = $this->estimateService->listEstimates($locationId, 100); // Max limit
-            
-            if (is_wp_error($result)) {
-                return $this->respond($result);
+
+            // Build cache key for the full (up to 100) GHL list for this location
+            $cacheKey = "ca_admin_estimates_ghl_full_{$locationId}";
+
+            $result   = get_transient($cacheKey);
+            $cacheHit = ($result !== false);
+
+            if (!$cacheHit) {
+                $result = $this->estimateService->listEstimates($locationId, 100); // legacy ceiling
+                if (is_wp_error($result)) {
+                    return $this->respond($result);
+                }
+                set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
             }
-            
-            // Cache the full GHL result for 3 minutes (180 seconds)
-            // Short TTL to balance freshness vs performance
-            set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
-            
-            // Debug logging: GHL call completed
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                $duration = round((microtime(true) - $startTime) * 1000, 2);
-                $itemCount = count($result['items'] ?? []);
-                error_log("[CheapAlarms][ADMIN_ESTIMATES] GHL API call completed in {$duration}ms - fetched {$itemCount} estimates for location {$locationId} - cached for 3 minutes");
-            }
+
+            $items = $result['items'] ?? [];
         }
 
-        $items = $result['items'] ?? [];
+        if (!is_array($items)) {
+            $items = [];
+        }
+
         $out   = [];
 
         // Extract all estimate IDs for batch fetching
