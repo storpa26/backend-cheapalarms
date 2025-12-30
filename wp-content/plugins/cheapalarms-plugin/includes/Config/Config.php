@@ -258,12 +258,18 @@ class Config
 
         $clean = array_values(array_unique($clean));
 
+        // SECURITY: Only allow localhost in development (WP_DEBUG mode)
+        // This prevents localhost from being allowed in production
+        $isDebug = defined('WP_DEBUG') && WP_DEBUG;
         $allowLocalhost = $this->getEnv('CA_ALLOW_LOCALHOST_CORS', false);
-        $isProd = defined('WP_DEBUG') ? !WP_DEBUG : true;
-
-        if ($isProd && !$allowLocalhost) {
+        
+        // In production (WP_DEBUG = false), remove localhost unless explicitly allowed
+        if (!$isDebug && !$allowLocalhost) {
             $clean = array_values(array_filter($clean, function ($o) {
-                return !str_contains($o, 'localhost') && !str_contains($o, '127.0.0.1');
+                $oLower = strtolower($o);
+                return !str_contains($oLower, 'localhost') 
+                    && !str_contains($oLower, '127.0.0.1')
+                    && !str_contains($oLower, '::1');
             }));
         }
 

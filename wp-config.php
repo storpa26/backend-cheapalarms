@@ -80,6 +80,11 @@ $table_prefix = 'wp_';
  * It is strongly recommended that plugin and theme developers use WP_DEBUG
  * in their development environments.
  *
+ * SECURITY: In production, set all to false:
+ * define('WP_DEBUG', false);
+ * define('WP_DEBUG_LOG', false);
+ * define('WP_DEBUG_DISPLAY', false);
+ *
  * For information on other constants that can be used for debugging,
  * visit the documentation.
  *
@@ -91,8 +96,16 @@ define('WP_DEBUG_DISPLAY', false);
 
 /* Add any custom values between this line and the "stop editing" line. */
 
-
-define('CA_DEV_BYPASS', true);
+/**
+ * SECURITY: Development bypass - ONLY enable in development!
+ * 
+ * In production, remove this line entirely or set to:
+ * define('CA_DEV_BYPASS', false);
+ * 
+ * This bypass allows unauthenticated access from localhost in debug mode.
+ * NEVER enable in production.
+ */
+define('CA_DEV_BYPASS', defined('WP_DEBUG') && WP_DEBUG);
 /* That's all, stop editing! Happy publishing. */
 
 /** Absolute path to the WordPress directory. */

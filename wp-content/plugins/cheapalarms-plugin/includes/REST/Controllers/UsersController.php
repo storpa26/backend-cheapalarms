@@ -66,16 +66,39 @@ class UsersController implements ControllerInterface
             ];
         }
 
-        return new WP_REST_Response([
+        $response = new WP_REST_Response([
             'ok' => true,
             'users' => $formatted,
             'total' => count($formatted),
         ], 200);
+        $this->addSecurityHeaders($response);
+        return $response;
     }
 
     private function isDevBypass(): bool
     {
         return defined('WP_DEBUG') && WP_DEBUG && isset($_SERVER['HTTP_X_CA_DEV']) && $_SERVER['HTTP_X_CA_DEV'] === '1';
+    }
+
+    /**
+     * Add security headers to response
+     *
+     * @param WP_REST_Response $response
+     * @return void
+     */
+    private function addSecurityHeaders(WP_REST_Response $response): void
+    {
+        // Prevent MIME type sniffing
+        $response->header('X-Content-Type-Options', 'nosniff');
+        
+        // XSS protection (legacy but still useful)
+        $response->header('X-XSS-Protection', '1; mode=block');
+        
+        // Prevent clickjacking
+        $response->header('X-Frame-Options', 'DENY');
+        
+        // Referrer policy
+        $response->header('Referrer-Policy', 'strict-origin-when-cross-origin');
     }
 }
 

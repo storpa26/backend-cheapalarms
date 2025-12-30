@@ -518,14 +518,25 @@ class XeroService
                 }
             }
             
-            $this->logger->error('Xero API error', [
-                'endpoint' => $endpoint,
-                'status' => $statusCode,
-                'error' => $errorMessage,
-                'validation_errors' => $validationErrors,
-                'full_response' => $data, // Log full response for debugging
-                'body' => $body,
-            ]);
+            // SECURITY: Only log full response in debug mode to prevent sensitive data exposure
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $this->logger->error('Xero API error', [
+                    'endpoint' => $endpoint,
+                    'status' => $statusCode,
+                    'error' => $errorMessage,
+                    'validation_errors' => $validationErrors,
+                    'full_response' => $data, // Only in debug mode
+                    'body' => $body,
+                ]);
+            } else {
+                $this->logger->error('Xero API error', [
+                    'endpoint' => $endpoint,
+                    'status' => $statusCode,
+                    'error' => $errorMessage,
+                    'validation_errors' => $validationErrors,
+                    // No full_response or body in production
+                ]);
+            }
             
             return new WP_Error('xero_api_error', $errorMessage, [
                 'status' => $statusCode, 

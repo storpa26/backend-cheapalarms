@@ -111,6 +111,40 @@ class Plugin
         if (function_exists('error_log')) {
             error_log('[CheapAlarms Plugin] bootstrap executing');
         }
+        
+        // SECURITY: Validate configuration before proceeding
+        // Instantiate Config directly since it has no dependencies and needs to be validated early
+        $config = new Config();
+        if (!$config->isConfigured()) {
+            $missing = [];
+            if (empty($config->getGhlToken())) {
+                $missing[] = 'ghl_token';
+            }
+            if (empty($config->getLocationId())) {
+                $missing[] = 'ghl_location_id';
+            }
+            if (empty($config->getUploadSharedSecret())) {
+                $missing[] = 'upload_shared_secret';
+            }
+            
+            $message = sprintf(
+                __('CheapAlarms plugin is not configured. Missing required secrets: %s. Please configure secrets.php or set environment variables.', 'cheapalarms'),
+                implode(', ', $missing)
+            );
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                wp_die($message, __('Plugin Configuration Error', 'cheapalarms'), ['response' => 500]);
+            } else {
+                // In production, log error but don't expose details
+                error_log('[CheapAlarms] Configuration error: Missing required secrets');
+                wp_die(
+                    __('CheapAlarms plugin is not properly configured. Please contact the administrator.', 'cheapalarms'),
+                    __('Plugin Configuration Error', 'cheapalarms'),
+                    ['response' => 500]
+                );
+            }
+        }
+        
         // Run schema upgrades only when needed (versioned).
         Schema::maybeMigrate();
         $this->registerRoles();

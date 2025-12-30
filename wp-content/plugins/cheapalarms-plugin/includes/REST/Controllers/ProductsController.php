@@ -30,7 +30,9 @@ class ProductsController implements ControllerInterface
             'permission_callback' => fn () => $this->isDevBypass() ?: $auth->requireCapability('ca_manage_portal'),
             'callback'            => function () use ($repo) {
                 $items = array_values($repo->all());
-                return new WP_REST_Response($items, 200);
+                $response = new WP_REST_Response($items, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
 
@@ -40,7 +42,9 @@ class ProductsController implements ControllerInterface
             'permission_callback' => fn () => $this->isDevBypass() ?: $auth->requireCapability('ca_manage_portal'),
             'callback'            => function () use ($repo) {
                 $items = array_values(array_filter($repo->all(), fn ($p) => ($p['type'] ?? '') === 'base'));
-                return new WP_REST_Response($items, 200);
+                $response = new WP_REST_Response($items, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
         register_rest_route('ca/v1', '/products/addons', [
@@ -48,7 +52,9 @@ class ProductsController implements ControllerInterface
             'permission_callback' => fn () => $this->isDevBypass() ?: $auth->requireCapability('ca_manage_portal'),
             'callback'            => function () use ($repo) {
                 $items = array_values(array_filter($repo->all(), fn ($p) => ($p['type'] ?? '') === 'addon'));
-                return new WP_REST_Response($items, 200);
+                $response = new WP_REST_Response($items, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
         register_rest_route('ca/v1', '/products/packages', [
@@ -56,7 +62,9 @@ class ProductsController implements ControllerInterface
             'permission_callback' => fn () => $this->isDevBypass() ?: $auth->requireCapability('ca_manage_portal'),
             'callback'            => function () use ($repo) {
                 $items = array_values(array_filter($repo->all(), fn ($p) => ($p['type'] ?? '') === 'package'));
-                return new WP_REST_Response($items, 200);
+                $response = new WP_REST_Response($items, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
 
@@ -70,7 +78,9 @@ class ProductsController implements ControllerInterface
                 if (!$item) {
                     return new WP_Error('not_found', __('Product not found.', 'cheapalarms'), ['status' => 404]);
                 }
-                return new WP_REST_Response($item, 200);
+                $response = new WP_REST_Response($item, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
 
@@ -88,7 +98,9 @@ class ProductsController implements ControllerInterface
                     return $validated;
                 }
                 $saved = $repo->save($validated);
-                return new WP_REST_Response($saved, 200);
+                $response = new WP_REST_Response($saved, 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
 
@@ -102,7 +114,9 @@ class ProductsController implements ControllerInterface
                 if (!$ok) {
                     return new WP_Error('not_found', __('Product not found.', 'cheapalarms'), ['status' => 404]);
                 }
-                return new WP_REST_Response(['ok' => true], 200);
+                $response = new WP_REST_Response(['ok' => true], 200);
+                $this->addSecurityHeaders($response);
+                return $response;
             },
         ]);
     }
@@ -239,6 +253,27 @@ class ProductsController implements ControllerInterface
             return true;
         }
         return false;
+    }
+
+    /**
+     * Add security headers to response
+     *
+     * @param WP_REST_Response $response
+     * @return void
+     */
+    private function addSecurityHeaders(WP_REST_Response $response): void
+    {
+        // Prevent MIME type sniffing
+        $response->header('X-Content-Type-Options', 'nosniff');
+        
+        // XSS protection (legacy but still useful)
+        $response->header('X-XSS-Protection', '1; mode=block');
+        
+        // Prevent clickjacking
+        $response->header('X-Frame-Options', 'DENY');
+        
+        // Referrer policy
+        $response->header('Referrer-Policy', 'strict-origin-when-cross-origin');
     }
 }
 

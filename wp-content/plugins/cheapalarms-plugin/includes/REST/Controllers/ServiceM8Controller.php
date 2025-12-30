@@ -503,19 +503,30 @@ class ServiceM8Controller implements ControllerInterface
                 }
             }
             
-            return new WP_REST_Response([
+            $response = [
                 'ok'  => false,
                 'err' => $errorMessage,
+                'error' => $errorMessage, // Standardized field
                 'code'=> $result->get_error_code(),
-                'details' => $errorDetails, // Include full error details for debugging
-            ], $status);
+            ];
+            
+            // SECURITY: Only include detailed error information in debug mode
+            if (defined('WP_DEBUG') && WP_DEBUG && !empty($errorDetails)) {
+                $response['details'] = $errorDetails;
+            }
+            
+            $restResponse = new WP_REST_Response($response, $status);
+            $this->addSecurityHeaders($restResponse);
+            return $restResponse;
         }
 
         if (!isset($result['ok'])) {
             $result['ok'] = true;
         }
 
-        return new WP_REST_Response($result, 200);
+        $response = new WP_REST_Response($result, 200);
+        $this->addSecurityHeaders($response);
+        return $response;
     }
 
     private function isDevBypass(): bool
