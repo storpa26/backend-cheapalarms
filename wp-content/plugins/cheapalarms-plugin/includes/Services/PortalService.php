@@ -2267,10 +2267,6 @@ class PortalService
             return null;
         }
 
-        $subject = $isResend
-            ? __('CheapAlarms portal invite (resent)', 'cheapalarms')
-            : __('Your CheapAlarms portal is ready', 'cheapalarms');
-
         // Generate password reset key pointing to Next.js frontend
         $key = get_password_reset_key($user);
         $resetUrl = null;
@@ -2286,19 +2282,71 @@ class PortalService
             );
         }
 
-        $headers  = ['Content-Type: text/html; charset=UTF-8'];
-        $greeting = sprintf(__('Hi %s,', 'cheapalarms'), $name);
-
-        $body  = '<p>' . esc_html($greeting) . '</p>';
-        $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the secure links below to access your estimate and manage your installation.', 'cheapalarms')) . '</p>';
-        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
-        
-        if ($resetUrl) {
-            $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+        // Get estimate number if estimateId is provided
+        $estimateNumber = '';
+        if ($estimateId && $locationId) {
+            try {
+                $estimate = $this->estimateService->getEstimate([
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                ]);
+                if (!is_wp_error($estimate)) {
+                    $estimateNumber = $estimate['estimateNumber'] ?? '';
+                }
+            } catch (\Exception $e) {
+                // Ignore errors, use empty estimate number
+            }
         }
-        
-        $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
-        $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+
+        // Get user context for email personalization
+        $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
+
+        // Render context-aware email template
+        $emailTemplate = null;
+        try {
+            $emailTemplateService = $this->container->get(EmailTemplateService::class);
+            $emailData = [
+                'customerName' => $name,
+                'portalUrl' => $portalUrl,
+                'resetUrl' => $resetUrl,
+                'isResend' => $isResend,
+                'estimateNumber' => $estimateNumber,
+            ];
+
+            $emailTemplate = $emailTemplateService->renderPortalInviteEmail($userContext, $emailData);
+            $subject = $emailTemplate['subject'] ?? ($isResend ? __('CheapAlarms portal invite (resent)', 'cheapalarms') : __('Your CheapAlarms portal is ready', 'cheapalarms'));
+            $body = $emailTemplate['body'] ?? '';
+
+            // Fallback if template rendering failed
+            if (empty($body)) {
+                error_log('[CheapAlarms][WARNING] Portal invite email template returned empty body, using fallback');
+                $subject = $isResend
+                    ? __('CheapAlarms portal invite (resent)', 'cheapalarms')
+                    : __('Your CheapAlarms portal is ready', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $name)) . '</p>';
+                $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the secure links below to access your estimate and manage your installation.', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+                if ($resetUrl) {
+                    $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+                }
+                $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
+        } catch (\Exception $e) {
+            error_log('[CheapAlarms][ERROR] Failed to render portal invite email template: ' . $e->getMessage());
+            // Fallback to simple email
+            $subject = $isResend
+                ? __('CheapAlarms portal invite (resent)', 'cheapalarms')
+                : __('Your CheapAlarms portal is ready', 'cheapalarms');
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $name)) . '</p>';
+            $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the secure links below to access your estimate and manage your installation.', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+            if ($resetUrl) {
+                $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+            }
+            $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+        }
 
         // Send via GHL if contactId available (all customer emails must use GHL)
         $sent = false;
@@ -2330,6 +2378,7 @@ class PortalService
             }
         }
 
+        $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
         $this->logger->info('Portal invite email sent', [
             'email'     => $email,
             'userId'    => $userId,
@@ -2337,6 +2386,7 @@ class PortalService
             'contactId' => $contactId,
             'sentViaGhl' => $contactId ? true : false,
             'sent'      => $sent,
+            'variation' => $variation,
         ]);
 
         return $resetUrl;
@@ -2442,44 +2492,83 @@ class PortalService
 
         $displayName = sanitize_text_field($contact['name'] ?? $contact['firstName'] ?? 'Customer');
         
-        // Subject: Estimate-specific
-        $subject = $estimateNumber 
-            ? sprintf(__('Your estimate #%s is ready', 'cheapalarms'), $estimateNumber)
-            : __('Your estimate is ready', 'cheapalarms');
-
-        // Email body: Estimate-focused
-        $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
-        $body = '<p>' . $greeting . '</p>';
+        // Get user ID from email
+        $userId = email_exists($email);
         
-        if ($estimateNumber) {
-            $body .= '<p>' . esc_html(sprintf(
-                __('Your estimate #%s is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms'),
-                $estimateNumber
-            )) . '</p>';
-        } else {
-            $body .= '<p>' . esc_html(__('Your estimate is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms')) . '</p>';
+        // Get user context for email personalization
+        $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
+
+        // Render context-aware email template
+        $emailTemplate = null;
+        try {
+            $emailTemplateService = $this->container->get(EmailTemplateService::class);
+            $emailData = [
+                'customerName' => $displayName,
+                'estimateNumber' => $estimateNumber,
+                'portalUrl' => $portalUrl,
+                'resetUrl' => $resetUrl,
+            ];
+
+            $emailTemplate = $emailTemplateService->renderEstimateEmail($userContext, $emailData);
+            $subject = $emailTemplate['subject'] ?? ($estimateNumber ? sprintf(__('Your estimate #%s is ready', 'cheapalarms'), $estimateNumber) : __('Your estimate is ready', 'cheapalarms'));
+            $body = $emailTemplate['body'] ?? '';
+
+            // Fallback if template rendering failed
+            if (empty($body)) {
+                error_log('[CheapAlarms][WARNING] Estimate email template returned empty body, using fallback');
+                $subject = $estimateNumber 
+                    ? sprintf(__('Your estimate #%s is ready', 'cheapalarms'), $estimateNumber)
+                    : __('Your estimate is ready', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $displayName)) . '</p>';
+                if ($estimateNumber) {
+                    $body .= '<p>' . esc_html(sprintf(
+                        __('Your estimate #%s is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms'),
+                        $estimateNumber
+                    )) . '</p>';
+                } else {
+                    $body .= '<p>' . esc_html(__('Your estimate is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms')) . '</p>';
+                }
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View Your Estimate', 'cheapalarms')) . '</a></p>';
+                if ($resetUrl) {
+                    $body .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('set your password to access your account', 'cheapalarms')) . '</a></p>';
+                }
+                $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
+        } catch (\Exception $e) {
+            error_log('[CheapAlarms][ERROR] Failed to render estimate email template: ' . $e->getMessage());
+            // Fallback to simple email
+            $subject = $estimateNumber 
+                ? sprintf(__('Your estimate #%s is ready', 'cheapalarms'), $estimateNumber)
+                : __('Your estimate is ready', 'cheapalarms');
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $displayName)) . '</p>';
+            if ($estimateNumber) {
+                $body .= '<p>' . esc_html(sprintf(
+                    __('Your estimate #%s is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms'),
+                    $estimateNumber
+                )) . '</p>';
+            } else {
+                $body .= '<p>' . esc_html(__('Your estimate is ready for review. Click the button below to view your estimate and manage your installation:', 'cheapalarms')) . '</p>';
+            }
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View Your Estimate', 'cheapalarms')) . '</a></p>';
+            if ($resetUrl) {
+                $body .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('set your password to access your account', 'cheapalarms')) . '</a></p>';
+            }
+            $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
         }
-
-        // Primary CTA: View Estimate (portal link)
-        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View Your Estimate', 'cheapalarms')) . '</a></p>';
-
-        // Secondary action: Set password (if account exists but password not set)
-        if ($resetUrl) {
-            $body .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('set your password to access your account', 'cheapalarms')) . '</a></p>';
-        }
-
-        $body .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
-        $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
         // Send via GHL Conversations API
         $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
 
+        $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
         $this->logger->info('Estimate email sent', [
             'estimateId' => $estimateId,
             'estimateNumber' => $estimateNumber,
             'email' => $email,
             'contactId' => $contactId,
             'sent' => $sent,
+            'variation' => $variation,
         ]);
 
         return $sent;
@@ -2534,33 +2623,76 @@ class PortalService
                 return;
             }
 
-            $subject = __('Your invoice is ready for payment', 'cheapalarms');
-            $headers = ['Content-Type: text/html; charset=UTF-8'];
+            // Get user ID from email
+            $userId = email_exists($email);
+            
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-            $body .= '<p>' . esc_html(__('Great news! Your invoice is now ready for payment.', 'cheapalarms')) . '</p>';
-            
-            $body .= '<p><strong>' . esc_html(sprintf(__('Invoice #%s', 'cheapalarms'), $invoiceNumber)) . '</strong><br />';
-            $body .= esc_html(sprintf(__('Amount: %s $%s', 'cheapalarms'), $currency, number_format($invoiceTotal, 2))) . '</p>';
-            
-            if ($dueDate) {
-                $formattedDate = date_i18n(get_option('date_format'), strtotime($dueDate));
-                $body .= '<p>' . esc_html(sprintf(__('Due Date: %s', 'cheapalarms'), $formattedDate)) . '</p>';
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'invoiceNumber' => $invoiceNumber,
+                    'invoiceUrl' => $invoiceUrl,
+                    'invoiceTotal' => $invoiceTotal,
+                    'currency' => $currency,
+                    'dueDate' => $dueDate,
+                    'portalUrl' => $portalUrl,
+                ];
+
+                $emailTemplate = $emailTemplateService->renderInvoiceEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? __('Your invoice is ready for payment', 'cheapalarms');
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Invoice email template returned empty body, using fallback');
+                    $subject = __('Your invoice is ready for payment', 'cheapalarms');
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    $body .= '<p>' . esc_html(__('Great news! Your invoice is now ready for payment.', 'cheapalarms')) . '</p>';
+                    $body .= '<p><strong>' . esc_html(sprintf(__('Invoice #%s', 'cheapalarms'), $invoiceNumber)) . '</strong><br />';
+                    $body .= esc_html(sprintf(__('Amount: %s $%s', 'cheapalarms'), $currency, number_format($invoiceTotal, 2))) . '</p>';
+                    if ($dueDate) {
+                        $formattedDate = date_i18n(get_option('date_format'), strtotime($dueDate));
+                        $body .= '<p>' . esc_html(sprintf(__('Due Date: %s', 'cheapalarms'), $formattedDate)) . '</p>';
+                    }
+                    $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('Payment Options:', 'cheapalarms')) . '</p>';
+                    $body .= '<ul>';
+                    $body .= '<li>' . esc_html(__('Click the button above to pay online securely', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Multiple payment methods accepted', 'cheapalarms')) . '</li>';
+                    $body .= '</ul>';
+                    $body .= '<p>' . esc_html(__('You can also view this invoice and track your project progress in your portal:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('If you have any questions about your invoice, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render invoice email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = __('Your invoice is ready for payment', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                $body .= '<p>' . esc_html(__('Great news! Your invoice is now ready for payment.', 'cheapalarms')) . '</p>';
+                $body .= '<p><strong>' . esc_html(sprintf(__('Invoice #%s', 'cheapalarms'), $invoiceNumber)) . '</strong><br />';
+                $body .= esc_html(sprintf(__('Amount: %s $%s', 'cheapalarms'), $currency, number_format($invoiceTotal, 2))) . '</p>';
+                if ($dueDate) {
+                    $formattedDate = date_i18n(get_option('date_format'), strtotime($dueDate));
+                    $body .= '<p>' . esc_html(sprintf(__('Due Date: %s', 'cheapalarms'), $formattedDate)) . '</p>';
+                }
+                $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('Payment Options:', 'cheapalarms')) . '</p>';
+                $body .= '<ul>';
+                $body .= '<li>' . esc_html(__('Click the button above to pay online securely', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Multiple payment methods accepted', 'cheapalarms')) . '</li>';
+                $body .= '</ul>';
+                $body .= '<p>' . esc_html(__('You can also view this invoice and track your project progress in your portal:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('If you have any questions about your invoice, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
             }
-
-            $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
-
-            $body .= '<p>' . esc_html(__('Payment Options:', 'cheapalarms')) . '</p>';
-            $body .= '<ul>';
-            $body .= '<li>' . esc_html(__('Click the button above to pay online securely', 'cheapalarms')) . '</li>';
-            $body .= '<li>' . esc_html(__('Multiple payment methods accepted', 'cheapalarms')) . '</li>';
-            $body .= '</ul>';
-
-            $body .= '<p>' . esc_html(__('You can also view this invoice and track your project progress in your portal:', 'cheapalarms')) . '</p>';
-            $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
-
-            $body .= '<p>' . esc_html(__('If you have any questions about your invoice, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
             // Send via GHL instead of wp_mail
             $contactId = $contact['id'] ?? null;
@@ -2575,11 +2707,13 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
             $this->logger->info('Invoice ready email sent via GHL', [
                 'estimateId' => $estimateId,
                 'invoiceId' => $invoice['id'] ?? null,
                 'contactId' => $contactId,
                 'sent' => $sent,
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail invoice creation if email fails
@@ -2876,34 +3010,79 @@ class PortalService
             $invoice = $meta['invoice'] ?? null;
             $invoiceUrl = $invoice['url'] ?? null;
 
-            $subject = __('Thank you for accepting your estimate', 'cheapalarms');
-            $headers = ['Content-Type: text/html; charset=UTF-8'];
-
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-            $body .= '<p>' . esc_html(sprintf(
-                __('Thank you for accepting estimate #%s! We\'re excited to move forward with your project.', 'cheapalarms'),
-                $estimateNumber
-            )) . '</p>';
-
-            if ($invoiceUrl) {
-                $body .= '<p>' . esc_html(__('Your invoice has been created and is ready for payment:', 'cheapalarms')) . '</p>';
-                $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
-            } else {
-                $body .= '<p>' . esc_html(__('We\'re preparing your invoice and will send it to you shortly.', 'cheapalarms')) . '</p>';
-            }
-
-            $body .= '<p>' . esc_html(__('You can view your estimate and track progress in your portal:', 'cheapalarms')) . '</p>';
-            $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+            // Get user ID from email
+            $userId = email_exists($email);
             
-            $body .= '<p>' . esc_html(__('Next Steps:', 'cheapalarms')) . '</p>';
-            $body .= '<ul>';
-            $body .= '<li>' . esc_html(__('Complete payment using the invoice link above', 'cheapalarms')) . '</li>';
-            $body .= '<li>' . esc_html(__('Upload any required photos through your portal', 'cheapalarms')) . '</li>';
-            $body .= '<li>' . esc_html(__('Our team will contact you to schedule installation', 'cheapalarms')) . '</li>';
-            $body .= '</ul>';
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'invoiceUrl' => $invoiceUrl,
+                    'portalUrl' => $portalUrl,
+                ];
+
+                $emailTemplate = $emailTemplateService->renderAcceptanceEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? __('Thank you for accepting your estimate', 'cheapalarms');
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Acceptance email template returned empty body, using fallback');
+                    $subject = __('Thank you for accepting your estimate', 'cheapalarms');
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    $body .= '<p>' . esc_html(sprintf(
+                        __('Thank you for accepting estimate #%s! We\'re excited to move forward with your project.', 'cheapalarms'),
+                        $estimateNumber
+                    )) . '</p>';
+                    if ($invoiceUrl) {
+                        $body .= '<p>' . esc_html(__('Your invoice has been created and is ready for payment:', 'cheapalarms')) . '</p>';
+                        $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+                    } else {
+                        $body .= '<p>' . esc_html(__('We\'re preparing your invoice and will send it to you shortly.', 'cheapalarms')) . '</p>';
+                    }
+                    $body .= '<p>' . esc_html(__('You can view your estimate and track progress in your portal:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('Next Steps:', 'cheapalarms')) . '</p>';
+                    $body .= '<ul>';
+                    $body .= '<li>' . esc_html(__('Complete payment using the invoice link above', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Upload any required photos through your portal', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Our team will contact you to schedule installation', 'cheapalarms')) . '</li>';
+                    $body .= '</ul>';
+                    $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render acceptance email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = __('Thank you for accepting your estimate', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                $body .= '<p>' . esc_html(sprintf(
+                    __('Thank you for accepting estimate #%s! We\'re excited to move forward with your project.', 'cheapalarms'),
+                    $estimateNumber
+                )) . '</p>';
+                if ($invoiceUrl) {
+                    $body .= '<p>' . esc_html(__('Your invoice has been created and is ready for payment:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('View & Pay Invoice', 'cheapalarms')) . '</a></p>';
+                } else {
+                    $body .= '<p>' . esc_html(__('We\'re preparing your invoice and will send it to you shortly.', 'cheapalarms')) . '</p>';
+                }
+                $body .= '<p>' . esc_html(__('You can view your estimate and track progress in your portal:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '">' . esc_html(__('Open your portal', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('Next Steps:', 'cheapalarms')) . '</p>';
+                $body .= '<ul>';
+                $body .= '<li>' . esc_html(__('Complete payment using the invoice link above', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Upload any required photos through your portal', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Our team will contact you to schedule installation', 'cheapalarms')) . '</li>';
+                $body .= '</ul>';
+                $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
 
             // Send via GHL instead of wp_mail
             $contactId = $contact['id'] ?? null;
@@ -2918,11 +3097,13 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
             $this->logger->info('Acceptance confirmation email sent via GHL', [
                 'estimateId' => $estimateId,
                 'contactId' => $contactId,
                 'sent' => $sent,
                 'hasInvoice' => !empty($invoiceUrl),
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail acceptance if email fails
@@ -2974,49 +3155,6 @@ class PortalService
             $scheduledDate = $booking['scheduledDate'] ?? '';
             $scheduledTime = $booking['scheduledTime'] ?? '';
             $notes = $booking['notes'] ?? '';
-            
-            $formattedDate = '';
-            if ($scheduledDate) {
-                try {
-                    $dateObj = new \DateTime($scheduledDate);
-                    $formattedDate = $dateObj->format('l, F j, Y'); // e.g., "Monday, December 3, 2024"
-                } catch (\Exception $e) {
-                    $formattedDate = $scheduledDate;
-                }
-            }
-            
-            // Format time
-            $formattedTime = '';
-            if ($scheduledTime) {
-                try {
-                    $timeObj = \DateTime::createFromFormat('H:i', $scheduledTime);
-                    if ($timeObj) {
-                        $formattedTime = $timeObj->format('g:i A'); // e.g., "2:30 PM"
-                    } else {
-                        $formattedTime = $scheduledTime;
-                    }
-                } catch (\Exception $e) {
-                    $formattedTime = $scheduledTime;
-                }
-            }
-
-            $subject = __('Your installation has been scheduled', 'cheapalarms');
-            
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-            $body .= '<p>' . esc_html(__('Great news! Your installation has been scheduled.', 'cheapalarms')) . '</p>';
-            
-            $body .= '<div style="background-color: #f0f9ff; border-left: 4px solid #c95375; padding: 16px; margin: 20px 0;">';
-            $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Installation Details:', 'cheapalarms')) . '</strong></p>';
-            if ($formattedDate) {
-                $body .= '<p style="margin: 4px 0;">📅 <strong>' . esc_html(__('Date:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
-            }
-            if ($formattedTime) {
-                $body .= '<p style="margin: 4px 0;">🕐 <strong>' . esc_html(__('Time:', 'cheapalarms')) . '</strong> ' . esc_html($formattedTime) . '</p>';
-            }
-            if ($notes) {
-                $body .= '<p style="margin: 4px 0;">📝 <strong>' . esc_html(__('Notes:', 'cheapalarms')) . '</strong> ' . esc_html($notes) . '</p>';
-            }
-            $body .= '</div>';
 
             // Get payment info if invoice exists
             $meta = $this->getMeta($estimateId);
@@ -3031,16 +3169,130 @@ class PortalService
                 }
             }
 
-            if ($invoiceUrl) {
-                $body .= '<p>' . esc_html(__('Next step: Complete your payment to finalize everything.', 'cheapalarms')) . '</p>';
-                $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Complete Payment', 'cheapalarms')) . '</a></p>';
-            } else {
-                $body .= '<p>' . esc_html(__('You can complete your payment and view all details in your portal:', 'cheapalarms')) . '</p>';
-                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
-            }
+            // Get user ID from email
+            $userId = email_exists($email);
+            
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            $body .= '<p>' . esc_html(__('If you need to reschedule or have any questions, please contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'scheduledDate' => $scheduledDate,
+                    'scheduledTime' => $scheduledTime,
+                    'notes' => $notes,
+                    'invoiceUrl' => $invoiceUrl,
+                    'portalUrl' => $portalUrl,
+                ];
+
+                $emailTemplate = $emailTemplateService->renderBookingEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? __('Your installation has been scheduled', 'cheapalarms');
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Booking email template returned empty body, using fallback');
+                    $subject = __('Your installation has been scheduled', 'cheapalarms');
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    $body .= '<p>' . esc_html(__('Great news! Your installation has been scheduled.', 'cheapalarms')) . '</p>';
+                    $formattedDate = '';
+                    if ($scheduledDate) {
+                        try {
+                            $dateObj = new \DateTime($scheduledDate);
+                            $formattedDate = $dateObj->format('l, F j, Y');
+                        } catch (\Exception $e) {
+                            $formattedDate = $scheduledDate;
+                        }
+                    }
+                    $formattedTime = '';
+                    if ($scheduledTime) {
+                        try {
+                            $timeObj = \DateTime::createFromFormat('H:i', $scheduledTime);
+                            if ($timeObj) {
+                                $formattedTime = $timeObj->format('g:i A');
+                            } else {
+                                $formattedTime = $scheduledTime;
+                            }
+                        } catch (\Exception $e) {
+                            $formattedTime = $scheduledTime;
+                        }
+                    }
+                    $body .= '<div style="background-color: #f0f9ff; border-left: 4px solid #c95375; padding: 16px; margin: 20px 0;">';
+                    $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Installation Details:', 'cheapalarms')) . '</strong></p>';
+                    if ($formattedDate) {
+                        $body .= '<p style="margin: 4px 0;">📅 <strong>' . esc_html(__('Date:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+                    }
+                    if ($formattedTime) {
+                        $body .= '<p style="margin: 4px 0;">🕐 <strong>' . esc_html(__('Time:', 'cheapalarms')) . '</strong> ' . esc_html($formattedTime) . '</p>';
+                    }
+                    if ($notes) {
+                        $body .= '<p style="margin: 4px 0;">📝 <strong>' . esc_html(__('Notes:', 'cheapalarms')) . '</strong> ' . esc_html($notes) . '</p>';
+                    }
+                    $body .= '</div>';
+                    if ($invoiceUrl) {
+                        $body .= '<p>' . esc_html(__('Next step: Complete your payment to finalize everything.', 'cheapalarms')) . '</p>';
+                        $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Complete Payment', 'cheapalarms')) . '</a></p>';
+                    } else {
+                        $body .= '<p>' . esc_html(__('You can complete your payment and view all details in your portal:', 'cheapalarms')) . '</p>';
+                        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                    }
+                    $body .= '<p>' . esc_html(__('If you need to reschedule or have any questions, please contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render booking email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = __('Your installation has been scheduled', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                $body .= '<p>' . esc_html(__('Great news! Your installation has been scheduled.', 'cheapalarms')) . '</p>';
+                $formattedDate = '';
+                if ($scheduledDate) {
+                    try {
+                        $dateObj = new \DateTime($scheduledDate);
+                        $formattedDate = $dateObj->format('l, F j, Y');
+                    } catch (\Exception $e) {
+                        $formattedDate = $scheduledDate;
+                    }
+                }
+                $formattedTime = '';
+                if ($scheduledTime) {
+                    try {
+                        $timeObj = \DateTime::createFromFormat('H:i', $scheduledTime);
+                        if ($timeObj) {
+                            $formattedTime = $timeObj->format('g:i A');
+                        } else {
+                            $formattedTime = $scheduledTime;
+                        }
+                    } catch (\Exception $e) {
+                        $formattedTime = $scheduledTime;
+                    }
+                }
+                $body .= '<div style="background-color: #f0f9ff; border-left: 4px solid #c95375; padding: 16px; margin: 20px 0;">';
+                $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Installation Details:', 'cheapalarms')) . '</strong></p>';
+                if ($formattedDate) {
+                    $body .= '<p style="margin: 4px 0;">📅 <strong>' . esc_html(__('Date:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+                }
+                if ($formattedTime) {
+                    $body .= '<p style="margin: 4px 0;">🕐 <strong>' . esc_html(__('Time:', 'cheapalarms')) . '</strong> ' . esc_html($formattedTime) . '</p>';
+                }
+                if ($notes) {
+                    $body .= '<p style="margin: 4px 0;">📝 <strong>' . esc_html(__('Notes:', 'cheapalarms')) . '</strong> ' . esc_html($notes) . '</p>';
+                }
+                $body .= '</div>';
+                if ($invoiceUrl) {
+                    $body .= '<p>' . esc_html(__('Next step: Complete your payment to finalize everything.', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($invoiceUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Complete Payment', 'cheapalarms')) . '</a></p>';
+                } else {
+                    $body .= '<p>' . esc_html(__('You can complete your payment and view all details in your portal:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                }
+                $body .= '<p>' . esc_html(__('If you need to reschedule or have any questions, please contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
 
             // Send via GHL
             $contactId = $contact['id'] ?? null;
@@ -3055,12 +3307,14 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'standard') : 'standard';
             $this->logger->info('Booking confirmation email sent via GHL', [
                 'estimateId' => $estimateId,
                 'contactId' => $contactId,
                 'sent' => $sent,
                 'scheduledDate' => $scheduledDate,
                 'scheduledTime' => $scheduledTime,
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail booking if email fails
@@ -3138,38 +3392,91 @@ class PortalService
                 }
             }
 
-            $subject = __('Payment confirmed - Thank you!', 'cheapalarms');
+            // Get user ID from email
+            $userId = email_exists($email);
             
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-            $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
-            
-            $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
-            $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
-            $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
-            if ($payment['transactionId'] ?? null) {
-                $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
-            }
-            if ($formattedDate) {
-                $body .= '<p style="margin: 4px 0;">✅ <strong>' . esc_html(__('Paid on:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
-            }
-            $body .= '</div>';
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            if ($bookingDate) {
-                $body .= '<p>' . esc_html(sprintf(
-                    __('Your installation is confirmed for %s.', 'cheapalarms'),
-                    $bookingDate
-                )) . '</p>';
-            } else {
-                $body .= '<p>' . esc_html(__('Your installation is confirmed.', 'cheapalarms')) . '</p>';
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'paymentAmount' => $amount,
+                    'currency' => $currency,
+                    'transactionId' => $payment['transactionId'] ?? '',
+                    'paidAt' => $paidAt,
+                    'bookingDate' => $booking ? ($booking['scheduledDate'] ?? '') : '',
+                    'portalUrl' => $portalUrl,
+                ];
+
+                $emailTemplate = $emailTemplateService->renderPaymentEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? __('Payment confirmed - Thank you!', 'cheapalarms');
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Payment email template returned empty body, using fallback');
+                    $subject = __('Payment confirmed - Thank you!', 'cheapalarms');
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
+                    $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+                    $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
+                    $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                    if ($payment['transactionId'] ?? null) {
+                        $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
+                    }
+                    if ($formattedDate) {
+                        $body .= '<p style="margin: 4px 0;">✅ <strong>' . esc_html(__('Paid on:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+                    }
+                    $body .= '</div>';
+                    if ($bookingDate) {
+                        $body .= '<p>' . esc_html(sprintf(
+                            __('Your installation is confirmed for %s.', 'cheapalarms'),
+                            $bookingDate
+                        )) . '</p>';
+                    } else {
+                        $body .= '<p>' . esc_html(__('Your installation is confirmed.', 'cheapalarms')) . '</p>';
+                    }
+                    $body .= '<p>' . esc_html(__('We\'ll be in touch soon with installation details and any final preparations needed.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('You can view all details and track progress in your portal:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render payment email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = __('Payment confirmed - Thank you!', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
+                $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+                $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
+                $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                if ($payment['transactionId'] ?? null) {
+                    $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
+                }
+                if ($formattedDate) {
+                    $body .= '<p style="margin: 4px 0;">✅ <strong>' . esc_html(__('Paid on:', 'cheapalarms')) . '</strong> ' . esc_html($formattedDate) . '</p>';
+                }
+                $body .= '</div>';
+                if ($bookingDate) {
+                    $body .= '<p>' . esc_html(sprintf(
+                        __('Your installation is confirmed for %s.', 'cheapalarms'),
+                        $bookingDate
+                    )) . '</p>';
+                } else {
+                    $body .= '<p>' . esc_html(__('Your installation is confirmed.', 'cheapalarms')) . '</p>';
+                }
+                $body .= '<p>' . esc_html(__('We\'ll be in touch soon with installation details and any final preparations needed.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('You can view all details and track progress in your portal:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
             }
-
-            $body .= '<p>' . esc_html(__('We\'ll be in touch soon with installation details and any final preparations needed.', 'cheapalarms')) . '</p>';
-            
-            $body .= '<p>' . esc_html(__('You can view all details and track progress in your portal:', 'cheapalarms')) . '</p>';
-            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
-
-            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
             // Send via GHL
             $contactId = $contact['id'] ?? null;
@@ -3184,11 +3491,13 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'standard') : 'standard';
             $this->logger->info('Payment confirmation email sent via GHL', [
                 'estimateId' => $estimateId,
                 'contactId' => $contactId,
                 'sent' => $sent,
                 'amount' => $amount,
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail payment if email fails
@@ -3480,44 +3789,96 @@ class PortalService
             $hasNote = !empty($adminNote);
             $photosRequired = !empty($quote['photos_required']);
 
-            $subject = sprintf(__('Update needed for Estimate #%s', 'cheapalarms'), $estimateNumber);
+            // Get user ID from email
+            $userId = email_exists($email);
+            
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-            
-            $body .= '<p>' . esc_html(__('We\'ve reviewed your estimate and need a few updates before we can proceed.', 'cheapalarms')) . '</p>';
-            
-            if ($photosRequired) {
-                $body .= '<p>' . esc_html(__('We need some additional or updated photos of your installation area.', 'cheapalarms')) . '</p>';
-            } else {
-                $body .= '<p>' . esc_html(__('We need some additional information to finalize your estimate.', 'cheapalarms')) . '</p>';
-            }
-            
-            // Include admin's note if provided
-            if ($hasNote) {
-                $body .= '<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 4px;">';
-                $body .= '<p style="margin: 0 0 8px 0; font-weight: bold; color: #92400e;">' . esc_html(__('Note from our team:', 'cheapalarms')) . '</p>';
-                $body .= '<p style="margin: 0; color: #78350f;">' . nl2br(esc_html($adminNote)) . '</p>';
-                $body .= '</div>';
-            }
-            
-            $body .= '<p>' . esc_html(__('What you need to do:', 'cheapalarms')) . '</p>';
-            $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
-            if ($photosRequired) {
-                $body .= '<li>' . esc_html(__('Review the note above for specific photo requirements', 'cheapalarms')) . '</li>';
-                $body .= '<li>' . esc_html(__('Upload the additional or updated photos in your portal', 'cheapalarms')) . '</li>';
-                $body .= '<li>' . esc_html(__('Submit your photos for review again', 'cheapalarms')) . '</li>';
-            } else {
-                $body .= '<li>' . esc_html(__('Review the note above for specific requirements', 'cheapalarms')) . '</li>';
-                $body .= '<li>' . esc_html(__('Update your information in the portal', 'cheapalarms')) . '</li>';
-                $body .= '<li>' . esc_html(__('Request a review again when ready', 'cheapalarms')) . '</li>';
-            }
-            $body .= '</ul>';
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'adminNote' => $adminNote,
+                    'photosRequired' => $photosRequired,
+                    'portalUrl' => $portalUrl,
+                ];
 
-            $body .= '<p>' . esc_html(__('You can access your portal and make the updates here:', 'cheapalarms')) . '</p>';
-            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                $emailTemplate = $emailTemplateService->renderChangesRequestedEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? sprintf(__('Update needed for Estimate #%s', 'cheapalarms'), $estimateNumber);
+                $body = $emailTemplate['body'] ?? '';
 
-            $body .= '<p>' . esc_html(__('If you have any questions or need clarification, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Changes requested email template returned empty body, using fallback');
+                    $subject = sprintf(__('Update needed for Estimate #%s', 'cheapalarms'), $estimateNumber);
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    $body .= '<p>' . esc_html(__('We\'ve reviewed your estimate and need a few updates before we can proceed.', 'cheapalarms')) . '</p>';
+                    if ($photosRequired) {
+                        $body .= '<p>' . esc_html(__('We need some additional or updated photos of your installation area.', 'cheapalarms')) . '</p>';
+                    } else {
+                        $body .= '<p>' . esc_html(__('We need some additional information to finalize your estimate.', 'cheapalarms')) . '</p>';
+                    }
+                    if ($hasNote) {
+                        $body .= '<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 4px;">';
+                        $body .= '<p style="margin: 0 0 8px 0; font-weight: bold; color: #92400e;">' . esc_html(__('Note from our team:', 'cheapalarms')) . '</p>';
+                        $body .= '<p style="margin: 0; color: #78350f;">' . nl2br(esc_html($adminNote)) . '</p>';
+                        $body .= '</div>';
+                    }
+                    $body .= '<p>' . esc_html(__('What you need to do:', 'cheapalarms')) . '</p>';
+                    $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+                    if ($photosRequired) {
+                        $body .= '<li>' . esc_html(__('Review the note above for specific photo requirements', 'cheapalarms')) . '</li>';
+                        $body .= '<li>' . esc_html(__('Upload the additional or updated photos in your portal', 'cheapalarms')) . '</li>';
+                        $body .= '<li>' . esc_html(__('Submit your photos for review again', 'cheapalarms')) . '</li>';
+                    } else {
+                        $body .= '<li>' . esc_html(__('Review the note above for specific requirements', 'cheapalarms')) . '</li>';
+                        $body .= '<li>' . esc_html(__('Update your information in the portal', 'cheapalarms')) . '</li>';
+                        $body .= '<li>' . esc_html(__('Request a review again when ready', 'cheapalarms')) . '</li>';
+                    }
+                    $body .= '</ul>';
+                    $body .= '<p>' . esc_html(__('You can access your portal and make the updates here:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('If you have any questions or need clarification, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render changes requested email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = sprintf(__('Update needed for Estimate #%s', 'cheapalarms'), $estimateNumber);
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                $body .= '<p>' . esc_html(__('We\'ve reviewed your estimate and need a few updates before we can proceed.', 'cheapalarms')) . '</p>';
+                if ($photosRequired) {
+                    $body .= '<p>' . esc_html(__('We need some additional or updated photos of your installation area.', 'cheapalarms')) . '</p>';
+                } else {
+                    $body .= '<p>' . esc_html(__('We need some additional information to finalize your estimate.', 'cheapalarms')) . '</p>';
+                }
+                if ($hasNote) {
+                    $body .= '<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 4px;">';
+                    $body .= '<p style="margin: 0 0 8px 0; font-weight: bold; color: #92400e;">' . esc_html(__('Note from our team:', 'cheapalarms')) . '</p>';
+                    $body .= '<p style="margin: 0; color: #78350f;">' . nl2br(esc_html($adminNote)) . '</p>';
+                    $body .= '</div>';
+                }
+                $body .= '<p>' . esc_html(__('What you need to do:', 'cheapalarms')) . '</p>';
+                $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+                if ($photosRequired) {
+                    $body .= '<li>' . esc_html(__('Review the note above for specific photo requirements', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Upload the additional or updated photos in your portal', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Submit your photos for review again', 'cheapalarms')) . '</li>';
+                } else {
+                    $body .= '<li>' . esc_html(__('Review the note above for specific requirements', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Update your information in the portal', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Request a review again when ready', 'cheapalarms')) . '</li>';
+                }
+                $body .= '</ul>';
+                $body .= '<p>' . esc_html(__('You can access your portal and make the updates here:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('Open Your Portal', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('If you have any questions or need clarification, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
 
             // Send via GHL
             $contactId = $contact['id'] ?? null;
@@ -3532,12 +3893,14 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'standard') : 'standard';
             $this->logger->info('Changes requested email sent via GHL', [
                 'estimateId' => $estimateId,
                 'contactId' => $contactId,
                 'sent' => $sent,
                 'hasNote' => $hasNote,
                 'photosRequired' => $photosRequired,
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail request changes if email fails
@@ -3590,53 +3953,110 @@ class PortalService
             $revision = $meta['revision'] ?? null;
             $hasRevision = !empty($revision);
 
-            $subject = $hasRevision
-                ? __('Your estimate has been reviewed and updated', 'cheapalarms')
-                : __('Your estimate review is complete', 'cheapalarms');
-
-            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            // Get user ID from email
+            $userId = email_exists($email);
             
-            if ($hasRevision) {
-                // If revision exists, mention the update
-                $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos and updated your estimate accordingly.', 'cheapalarms')) . '</p>';
-                
-                // Show revision summary if available
-                $netChange = $revision['netChange'] ?? 0;
-                $isSavings = $netChange < 0;
-                
-                if ($isSavings) {
-                    $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
-                    $body .= '<p style="margin: 0; font-size: 18px; font-weight: bold; color: #10b981;">' . esc_html(__('🎉 Great News!', 'cheapalarms')) . '</p>';
-                    $body .= '<p style="margin: 8px 0 0 0;">' . esc_html(sprintf(
-                        __('You save %s!', 'cheapalarms'),
-                        '$' . number_format(abs($netChange), 2)
-                    )) . '</p>';
-                    $body .= '</div>';
-                } else if ($netChange > 0) {
-                    $body .= '<div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0;">';
-                    $body .= '<p style="margin: 0;">' . esc_html(sprintf(
-                        __('Your estimate has been updated. Additional amount: %s', 'cheapalarms'),
-                        '$' . number_format($netChange, 2)
-                    )) . '</p>';
-                    $body .= '</div>';
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
+
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'hasRevision' => $hasRevision,
+                    'revision' => $revision,
+                    'portalUrl' => $portalUrl,
+                ];
+
+                $emailTemplate = $emailTemplateService->renderReviewCompletionEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? ($hasRevision ? __('Your estimate has been reviewed and updated', 'cheapalarms') : __('Your estimate review is complete', 'cheapalarms'));
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Review completion email template returned empty body, using fallback');
+                    $subject = $hasRevision
+                        ? __('Your estimate has been reviewed and updated', 'cheapalarms')
+                        : __('Your estimate review is complete', 'cheapalarms');
+                    $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    if ($hasRevision) {
+                        $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos and updated your estimate accordingly.', 'cheapalarms')) . '</p>';
+                        $netChange = $revision['netChange'] ?? 0;
+                        $isSavings = $netChange < 0;
+                        if ($isSavings) {
+                            $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+                            $body .= '<p style="margin: 0; font-size: 18px; font-weight: bold; color: #10b981;">' . esc_html(__('🎉 Great News!', 'cheapalarms')) . '</p>';
+                            $body .= '<p style="margin: 8px 0 0 0;">' . esc_html(sprintf(
+                                __('You save %s!', 'cheapalarms'),
+                                '$' . number_format(abs($netChange), 2)
+                            )) . '</p>';
+                            $body .= '</div>';
+                        } else if ($netChange > 0) {
+                            $body .= '<div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0;">';
+                            $body .= '<p style="margin: 0;">' . esc_html(sprintf(
+                                __('Your estimate has been updated. Additional amount: %s', 'cheapalarms'),
+                                '$' . number_format($netChange, 2)
+                            )) . '</p>';
+                            $body .= '</div>';
+                        }
+                    } else {
+                        $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos. Your estimate is ready for acceptance!', 'cheapalarms')) . '</p>';
+                    }
+                    $body .= '<p>' . esc_html(__('Next steps:', 'cheapalarms')) . '</p>';
+                    $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+                    $body .= '<li>' . esc_html(__('Review the updated estimate details', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Accept the estimate when ready', 'cheapalarms')) . '</li>';
+                    $body .= '<li>' . esc_html(__('Schedule your installation', 'cheapalarms')) . '</li>';
+                    $body .= '</ul>';
+                    $body .= '<p>' . esc_html(__('View your estimate and all details in your portal:', 'cheapalarms')) . '</p>';
+                    $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View Updated Estimate', 'cheapalarms')) . '</a></p>';
+                    $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                    $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
                 }
-            } else {
-                // No changes made
-                $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos. Your estimate is ready for acceptance!', 'cheapalarms')) . '</p>';
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render review completion email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = $hasRevision
+                    ? __('Your estimate has been reviewed and updated', 'cheapalarms')
+                    : __('Your estimate review is complete', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                if ($hasRevision) {
+                    $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos and updated your estimate accordingly.', 'cheapalarms')) . '</p>';
+                    $netChange = $revision['netChange'] ?? 0;
+                    $isSavings = $netChange < 0;
+                    if ($isSavings) {
+                        $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
+                        $body .= '<p style="margin: 0; font-size: 18px; font-weight: bold; color: #10b981;">' . esc_html(__('🎉 Great News!', 'cheapalarms')) . '</p>';
+                        $body .= '<p style="margin: 8px 0 0 0;">' . esc_html(sprintf(
+                            __('You save %s!', 'cheapalarms'),
+                            '$' . number_format(abs($netChange), 2)
+                        )) . '</p>';
+                        $body .= '</div>';
+                    } else if ($netChange > 0) {
+                        $body .= '<div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0;">';
+                        $body .= '<p style="margin: 0;">' . esc_html(sprintf(
+                            __('Your estimate has been updated. Additional amount: %s', 'cheapalarms'),
+                            '$' . number_format($netChange, 2)
+                        )) . '</p>';
+                        $body .= '</div>';
+                    }
+                } else {
+                    $body .= '<p>' . esc_html(__('We\'ve completed reviewing your installation photos. Your estimate is ready for acceptance!', 'cheapalarms')) . '</p>';
+                }
+                $body .= '<p>' . esc_html(__('Next steps:', 'cheapalarms')) . '</p>';
+                $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
+                $body .= '<li>' . esc_html(__('Review the updated estimate details', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Accept the estimate when ready', 'cheapalarms')) . '</li>';
+                $body .= '<li>' . esc_html(__('Schedule your installation', 'cheapalarms')) . '</li>';
+                $body .= '</ul>';
+                $body .= '<p>' . esc_html(__('View your estimate and all details in your portal:', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View Updated Estimate', 'cheapalarms')) . '</a></p>';
+                $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
             }
-
-            $body .= '<p>' . esc_html(__('Next steps:', 'cheapalarms')) . '</p>';
-            $body .= '<ul style="margin: 16px 0; padding-left: 24px;">';
-            $body .= '<li>' . esc_html(__('Review the updated estimate details', 'cheapalarms')) . '</li>';
-            $body .= '<li>' . esc_html(__('Accept the estimate when ready', 'cheapalarms')) . '</li>';
-            $body .= '<li>' . esc_html(__('Schedule your installation', 'cheapalarms')) . '</li>';
-            $body .= '</ul>';
-
-            $body .= '<p>' . esc_html(__('View your estimate and all details in your portal:', 'cheapalarms')) . '</p>';
-            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 16px 0;">' . esc_html(__('View Updated Estimate', 'cheapalarms')) . '</a></p>';
-
-            $body .= '<p>' . esc_html(__('If you have any questions, please don\'t hesitate to contact us.', 'cheapalarms')) . '</p>';
-            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
             // Send via GHL
             $contactId = $contact['id'] ?? null;
@@ -3651,11 +4071,13 @@ class PortalService
                 ]);
             }
 
+            $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'standard') : 'standard';
             $this->logger->info('Review completion email sent via GHL', [
                 'estimateId' => $estimateId,
                 'contactId' => $contactId,
                 'sent' => $sent,
                 'hasRevision' => $hasRevision,
+                'variation' => $variation,
             ]);
         } catch (\Exception $e) {
             // Don't fail review completion if email fails
@@ -4048,62 +4470,129 @@ class PortalService
             $isSavings = $netChange < 0;
             $isIncrease = $netChange > 0;
 
-            // Different subject lines for savings vs increases
-            $subject = $isSavings 
-                ? sprintf(__('🎉 Great news! Your CheapAlarms estimate has been updated - Save %s %s', 'cheapalarms'), $currency, number_format(abs($netChange), 2))
-                : __('Your CheapAlarms estimate has been updated', 'cheapalarms');
-
-            $body = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">';
+            // Get user ID from email
+            $userId = email_exists($email);
             
-            $body .= '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+            // Get user context for email personalization
+            $userContext = UserContextHelper::getUserContext($userId, $email, $estimateId);
 
-            if ($isSavings) {
-                $body .= '<p><strong style="color: #10b981; font-size: 18px;">Good news!</strong> We\'ve reviewed the installation photos you submitted and found opportunities to optimize your installation.</p>';
-            } else {
-                $body .= '<p>We\'ve carefully reviewed the installation photos you submitted and updated your estimate to ensure accurate pricing for your specific site.</p>';
-            }
+            // Render context-aware email template
+            $emailTemplate = null;
+            try {
+                $emailTemplateService = $this->container->get(EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $customerName,
+                    'estimateNumber' => $estimateNumber,
+                    'revisionData' => [
+                        'oldTotal' => $oldTotal,
+                        'newTotal' => $newTotal,
+                        'netChange' => $netChange,
+                        'adminNote' => $adminNote,
+                    ],
+                    'portalUrl' => $portalUrl,
+                    'currency' => $currency,
+                ];
 
-            // Pricing box
-            $boxColor = $isSavings ? '#10b981' : '#1EA6DF';
-            $body .= '<div style="background: linear-gradient(135deg, ' . $boxColor . ', ' . ($isSavings ? '#059669' : '#0e7490') . '); color: white; padding: 24px; border-radius: 16px; margin: 24px 0; text-align: center;">';
-            $body .= '<div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">YOUR UPDATED PRICING</div>';
-            $body .= '<div style="font-size: 24px; text-decoration: line-through; opacity: 0.7; margin-bottom: 8px;">' . esc_html($currency . ' ' . number_format($oldTotal, 2)) . '</div>';
-            $body .= '<div style="font-size: 36px; font-weight: bold; margin-bottom: 16px;">' . esc_html($currency . ' ' . number_format($newTotal, 2)) . '</div>';
-            
-            if ($netChange !== 0) {
-                if ($isSavings) {
-                    $body .= '<div style="font-size: 28px; font-weight: bold; background: rgba(255,255,255,0.2); padding: 12px 24px; border-radius: 12px; display: inline-block;">🎊 YOU SAVE ' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
-                } else {
-                    $body .= '<div style="font-size: 18px; background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 8px; display: inline-block;">Additional: +' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                $emailTemplate = $emailTemplateService->renderRevisionEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? ($isSavings 
+                    ? sprintf(__('🎉 Great news! Your CheapAlarms estimate has been updated - Save %s %s', 'cheapalarms'), $currency, number_format(abs($netChange), 2))
+                    : __('Your CheapAlarms estimate has been updated', 'cheapalarms'));
+                $body = $emailTemplate['body'] ?? '';
+
+                // Fallback if template rendering failed
+                if (empty($body)) {
+                    error_log('[CheapAlarms][WARNING] Revision email template returned empty body, using fallback');
+                    $subject = $isSavings 
+                        ? sprintf(__('🎉 Great news! Your CheapAlarms estimate has been updated - Save %s %s', 'cheapalarms'), $currency, number_format(abs($netChange), 2))
+                        : __('Your CheapAlarms estimate has been updated', 'cheapalarms');
+                    $body = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">';
+                    $body .= '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                    if ($isSavings) {
+                        $body .= '<p><strong style="color: #10b981; font-size: 18px;">Good news!</strong> We\'ve reviewed the installation photos you submitted and found opportunities to optimize your installation.</p>';
+                    } else {
+                        $body .= '<p>We\'ve carefully reviewed the installation photos you submitted and updated your estimate to ensure accurate pricing for your specific site.</p>';
+                    }
+                    $boxColor = $isSavings ? '#10b981' : '#1EA6DF';
+                    $body .= '<div style="background: linear-gradient(135deg, ' . $boxColor . ', ' . ($isSavings ? '#059669' : '#0e7490') . '); color: white; padding: 24px; border-radius: 16px; margin: 24px 0; text-align: center;">';
+                    $body .= '<div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">YOUR UPDATED PRICING</div>';
+                    $body .= '<div style="font-size: 24px; text-decoration: line-through; opacity: 0.7; margin-bottom: 8px;">' . esc_html($currency . ' ' . number_format($oldTotal, 2)) . '</div>';
+                    $body .= '<div style="font-size: 36px; font-weight: bold; margin-bottom: 16px;">' . esc_html($currency . ' ' . number_format($newTotal, 2)) . '</div>';
+                    if ($netChange !== 0) {
+                        if ($isSavings) {
+                            $body .= '<div style="font-size: 28px; font-weight: bold; background: rgba(255,255,255,0.2); padding: 12px 24px; border-radius: 12px; display: inline-block;">🎊 YOU SAVE ' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                        } else {
+                            $body .= '<div style="font-size: 18px; background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 8px; display: inline-block;">Additional: +' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                        }
+                    }
+                    $body .= '</div>';
+                    if ($adminNote) {
+                        $body .= '<div style="background: #f8f9fa; border-left: 4px solid ' . $boxColor . '; padding: 16px; border-radius: 8px; margin: 24px 0;">';
+                        $body .= '<div style="font-size: 12px; text-transform: uppercase; color: #6b7280; margin-bottom: 8px;">FROM YOUR INSTALLER</div>';
+                        $body .= '<div style="color: #1f2937;">' . nl2br(esc_html($adminNote)) . '</div>';
+                        $body .= '</div>';
+                    }
+                    $body .= '<p><strong>What\'s next:</strong></p>';
+                    $body .= '<ol>';
+                    $body .= '<li>Review the updated estimate in your portal</li>';
+                    if ($isSavings) {
+                        $body .= '<li><strong>Accept now to lock in your savings!</strong></li>';
+                    } else {
+                        $body .= '<li>If you\'re happy with the pricing, accept the estimate</li>';
+                    }
+                    $body .= '<li>We\'ll then create your invoice and schedule installation</li>';
+                    $body .= '</ol>';
+                    $body .= '<p style="text-align: center; margin: 32px 0;"><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, #1EA6DF, #c95375); color: white; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 16px;">View Updated Estimate</a></p>';
+                    $body .= '<p style="color: #6b7280; font-size: 14px;">Have questions about the changes? Just reply to this email!</p>';
+                    $body .= '<p>Thanks,<br/>CheapAlarms Team</p>';
+                    $body .= '</div>';
                 }
-            }
-            $body .= '</div>';
-
-            // Admin note
-            if ($adminNote) {
-                $body .= '<div style="background: #f8f9fa; border-left: 4px solid ' . $boxColor . '; padding: 16px; border-radius: 8px; margin: 24px 0;">';
-                $body .= '<div style="font-size: 12px; text-transform: uppercase; color: #6b7280; margin-bottom: 8px;">FROM YOUR INSTALLER</div>';
-                $body .= '<div style="color: #1f2937;">' . nl2br(esc_html($adminNote)) . '</div>';
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render revision email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = $isSavings 
+                    ? sprintf(__('🎉 Great news! Your CheapAlarms estimate has been updated - Save %s %s', 'cheapalarms'), $currency, number_format(abs($netChange), 2))
+                    : __('Your CheapAlarms estimate has been updated', 'cheapalarms');
+                $body = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">';
+                $body .= '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
+                if ($isSavings) {
+                    $body .= '<p><strong style="color: #10b981; font-size: 18px;">Good news!</strong> We\'ve reviewed the installation photos you submitted and found opportunities to optimize your installation.</p>';
+                } else {
+                    $body .= '<p>We\'ve carefully reviewed the installation photos you submitted and updated your estimate to ensure accurate pricing for your specific site.</p>';
+                }
+                $boxColor = $isSavings ? '#10b981' : '#1EA6DF';
+                $body .= '<div style="background: linear-gradient(135deg, ' . $boxColor . ', ' . ($isSavings ? '#059669' : '#0e7490') . '); color: white; padding: 24px; border-radius: 16px; margin: 24px 0; text-align: center;">';
+                $body .= '<div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">YOUR UPDATED PRICING</div>';
+                $body .= '<div style="font-size: 24px; text-decoration: line-through; opacity: 0.7; margin-bottom: 8px;">' . esc_html($currency . ' ' . number_format($oldTotal, 2)) . '</div>';
+                $body .= '<div style="font-size: 36px; font-weight: bold; margin-bottom: 16px;">' . esc_html($currency . ' ' . number_format($newTotal, 2)) . '</div>';
+                if ($netChange !== 0) {
+                    if ($isSavings) {
+                        $body .= '<div style="font-size: 28px; font-weight: bold; background: rgba(255,255,255,0.2); padding: 12px 24px; border-radius: 12px; display: inline-block;">🎊 YOU SAVE ' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                    } else {
+                        $body .= '<div style="font-size: 18px; background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 8px; display: inline-block;">Additional: +' . esc_html($currency . ' ' . number_format(abs($netChange), 2)) . '</div>';
+                    }
+                }
+                $body .= '</div>';
+                if ($adminNote) {
+                    $body .= '<div style="background: #f8f9fa; border-left: 4px solid ' . $boxColor . '; padding: 16px; border-radius: 8px; margin: 24px 0;">';
+                    $body .= '<div style="font-size: 12px; text-transform: uppercase; color: #6b7280; margin-bottom: 8px;">FROM YOUR INSTALLER</div>';
+                    $body .= '<div style="color: #1f2937;">' . nl2br(esc_html($adminNote)) . '</div>';
+                    $body .= '</div>';
+                }
+                $body .= '<p><strong>What\'s next:</strong></p>';
+                $body .= '<ol>';
+                $body .= '<li>Review the updated estimate in your portal</li>';
+                if ($isSavings) {
+                    $body .= '<li><strong>Accept now to lock in your savings!</strong></li>';
+                } else {
+                    $body .= '<li>If you\'re happy with the pricing, accept the estimate</li>';
+                }
+                $body .= '<li>We\'ll then create your invoice and schedule installation</li>';
+                $body .= '</ol>';
+                $body .= '<p style="text-align: center; margin: 32px 0;"><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, #1EA6DF, #c95375); color: white; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 16px;">View Updated Estimate</a></p>';
+                $body .= '<p style="color: #6b7280; font-size: 14px;">Have questions about the changes? Just reply to this email!</p>';
+                $body .= '<p>Thanks,<br/>CheapAlarms Team</p>';
                 $body .= '</div>';
             }
-
-            // Call to action
-            $body .= '<p><strong>What\'s next:</strong></p>';
-            $body .= '<ol>';
-            $body .= '<li>Review the updated estimate in your portal</li>';
-            if ($isSavings) {
-                $body .= '<li><strong>Accept now to lock in your savings!</strong></li>';
-            } else {
-                $body .= '<li>If you\'re happy with the pricing, accept the estimate</li>';
-            }
-            $body .= '<li>We\'ll then create your invoice and schedule installation</li>';
-            $body .= '</ol>';
-
-            $body .= '<p style="text-align: center; margin: 32px 0;"><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, #1EA6DF, #c95375); color: white; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 16px;">View Updated Estimate</a></p>';
-
-            $body .= '<p style="color: #6b7280; font-size: 14px;">Have questions about the changes? Just reply to this email!</p>';
-            $body .= '<p>Thanks,<br/>CheapAlarms Team</p>';
-            $body .= '</div>';
 
             // Send via GHL
             $contactId = $contact['id'] ?? null;
@@ -4119,11 +4608,13 @@ class PortalService
             }
 
             if ($sent) {
+                $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'standard') : 'standard';
                 $this->logger->info('Estimate revision notification sent', [
                     'estimateId' => $estimateId,
                     'contactId' => $contactId,
                     'isSavings' => $isSavings,
                     'netChange' => $netChange,
+                    'variation' => $variation,
                 ]);
             }
 

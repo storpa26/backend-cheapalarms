@@ -23,7 +23,7 @@ class GhlClient
      * @param string|null $locationId Optional location ID to pass as header
      * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function get(string $path, array $query = [], int $timeout = 25, ?string $locationId = null, int $maxRetries = 2)
+    public function get(string $path, array $query = [], int $timeout = 10, ?string $locationId = null, int $maxRetries = 1)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
@@ -60,15 +60,12 @@ class GhlClient
             $errorCode = $response->get_error_code();
             $errorMessage = $response->get_error_message();
 
-            // Check if this is a transient SSL/network error that might benefit from retry
+            // Check if this is a transient network error that might benefit from retry
+            // Note: SSL errors are NOT retried - they're usually persistent network/configuration issues
             $isTransientError = (
-                strpos($errorMessage, 'SSL') !== false ||
-                strpos($errorMessage, 'SSL_ERROR') !== false ||
-                strpos($errorMessage, 'SSL_connect') !== false ||
                 strpos($errorMessage, 'Connection timed out') !== false ||
-                strpos($errorMessage, 'cURL error 35') !== false ||
                 strpos($errorMessage, 'cURL error 28') !== false ||
-                $errorCode === 'http_request_failed'
+                ($errorCode === 'http_request_failed' && strpos($errorMessage, 'SSL') === false)
             );
 
             $lastError = $response;
@@ -101,7 +98,7 @@ class GhlClient
      * @param string|null $locationId Optional location ID to pass as header
      * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function post(string $path, array $body, int $timeout = 30, ?string $locationId = null, int $maxRetries = 2)
+    public function post(string $path, array $body, int $timeout = 10, ?string $locationId = null, int $maxRetries = 1)
     {
         $url = self::BASE_URL . $path;
         $attempt = 0;
@@ -121,11 +118,9 @@ class GhlClient
             }
 
             $errorMessage = $response->get_error_message();
+            // Note: SSL errors are NOT retried - they're usually persistent network/configuration issues
             $isTransientError = (
-                strpos($errorMessage, 'SSL') !== false ||
-                strpos($errorMessage, 'SSL_ERROR') !== false ||
                 strpos($errorMessage, 'Connection timed out') !== false ||
-                strpos($errorMessage, 'cURL error 35') !== false ||
                 strpos($errorMessage, 'cURL error 28') !== false
             );
 
@@ -149,7 +144,7 @@ class GhlClient
      * @param string|null $locationId Optional location ID to pass as header
      * @param int $maxRetries Maximum number of retry attempts for transient errors
      */
-    public function put(string $path, array $body, array $query = [], int $timeout = 30, ?string $locationId = null, int $maxRetries = 2)
+    public function put(string $path, array $body, array $query = [], int $timeout = 10, ?string $locationId = null, int $maxRetries = 1)
     {
         $url = self::BASE_URL . $path;
         if ($query) {
@@ -174,11 +169,9 @@ class GhlClient
             }
 
             $errorMessage = $response->get_error_message();
+            // Note: SSL errors are NOT retried - they're usually persistent network/configuration issues
             $isTransientError = (
-                strpos($errorMessage, 'SSL') !== false ||
-                strpos($errorMessage, 'SSL_ERROR') !== false ||
                 strpos($errorMessage, 'Connection timed out') !== false ||
-                strpos($errorMessage, 'cURL error 35') !== false ||
                 strpos($errorMessage, 'cURL error 28') !== false
             );
 

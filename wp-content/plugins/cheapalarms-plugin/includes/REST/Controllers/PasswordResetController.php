@@ -7,6 +7,8 @@ use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\GhlClient;
 use CheapAlarms\Plugin\Services\PortalService;
 use CheapAlarms\Plugin\Services\Logger;
+use CheapAlarms\Plugin\Services\EmailTemplateService;
+use CheapAlarms\Plugin\Services\UserContextHelper;
 use CheapAlarms\Plugin\Config\Config;
 use WP_Error;
 use WP_REST_Request;
@@ -180,7 +182,7 @@ class PasswordResetController implements ControllerInterface
         usleep(1000000); // 1 second delay (increased from 0.5s)
 
         // Send email via GHL
-        $emailResult = $this->sendPasswordResetEmailViaGhl($contactId, $email, $user->display_name ?: $user->user_login, $resetUrl, $locationId);
+        $emailResult = $this->sendPasswordResetEmailViaGhl($contactId, $email, $userId, $user->display_name ?: $user->user_login, $resetUrl, $locationId);
         if (is_wp_error($emailResult)) {
             return $this->respond($emailResult);
         }
@@ -617,9 +619,9 @@ class PasswordResetController implements ControllerInterface
 
     /**
      * Send password reset email via GHL
-     * Uses the exact same pattern as GhlController to ensure consistency
+     * Uses context-aware EmailTemplateService
      */
-    private function sendPasswordResetEmailViaGhl(string $contactId, string $email, string $name, string $resetUrl, string $locationId): bool|WP_Error
+    private function sendPasswordResetEmailViaGhl(string $contactId, string $email, int $userId, string $name, string $resetUrl, string $locationId): bool|WP_Error
     {
         if (empty($contactId)) {
             return new WP_Error(
@@ -639,21 +641,58 @@ class PasswordResetController implements ControllerInterface
             );
         }
 
-        $subject = __('Set Your Password - CheapAlarms Portal', 'cheapalarms');
+        // Get user context for email personalization
+        $userContext = UserContextHelper::getUserContext($userId, $email);
         
-        $html = '<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">';
-        $html .= '<div style="max-width: 600px; margin: 0 auto; padding: 20px;">';
-        $html .= '<h2 style="color: #2563eb;">Set Your Password</h2>';
-        $html .= '<p>Hi ' . esc_html($name) . ',</p>';
-        $html .= '<p>Click the button below to set your password and access your CheapAlarms portal:</p>';
-        $html .= '<p style="margin: 30px 0;">';
-        $html .= '<a href="' . esc_url($resetUrl) . '" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Set Your Password</a>';
-        $html .= '</p>';
-        $html .= '<p style="color: #666; font-size: 14px;">Or copy and paste this link into your browser:</p>';
-        $html .= '<p style="color: #666; font-size: 12px; word-break: break-all;">' . esc_html($resetUrl) . '</p>';
-        $html .= '<p style="color: #666; font-size: 14px; margin-top: 30px;">This link will expire in 24 hours.</p>';
-        $html .= '<p style="margin-top: 30px;">Thanks,<br />CheapAlarms Team</p>';
-        $html .= '</div></body></html>';
+        // Render context-aware email template
+        $emailTemplate = null;
+        try {
+            $emailTemplateService = $this->container->get(EmailTemplateService::class);
+            $emailData = [
+                'customerName' => $name,
+                'resetUrl' => $resetUrl,
+            ];
+            
+            $emailTemplate = $emailTemplateService->renderPasswordResetEmail($userContext, $emailData);
+            $subject = $emailTemplate['subject'] ?? __('Set Your Password - CheapAlarms Portal', 'cheapalarms');
+            $html = $emailTemplate['body'] ?? '';
+            
+            // Fallback if template rendering failed
+            if (empty($html)) {
+                error_log('[CheapAlarms][WARNING] Password reset email template returned empty body, using fallback');
+                $subject = __('Set Your Password - CheapAlarms Portal', 'cheapalarms');
+                $html = '<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">';
+                $html .= '<div style="max-width: 600px; margin: 0 auto; padding: 20px;">';
+                $html .= '<h2 style="color: #2563eb;">Set Your Password</h2>';
+                $html .= '<p>Hi ' . esc_html($name) . ',</p>';
+                $html .= '<p>Click the button below to set your password and access your CheapAlarms portal:</p>';
+                $html .= '<p style="margin: 30px 0;">';
+                $html .= '<a href="' . esc_url($resetUrl) . '" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Set Your Password</a>';
+                $html .= '</p>';
+                $html .= '<p style="color: #666; font-size: 14px;">Or copy and paste this link into your browser:</p>';
+                $html .= '<p style="color: #666; font-size: 12px; word-break: break-all;">' . esc_html($resetUrl) . '</p>';
+                $html .= '<p style="color: #666; font-size: 14px; margin-top: 30px;">This link will expire in 24 hours.</p>';
+                $html .= '<p style="margin-top: 30px;">Thanks,<br />CheapAlarms Team</p>';
+                $html .= '</div></body></html>';
+            }
+        } catch (\Exception $e) {
+            error_log('[CheapAlarms][ERROR] Failed to render password reset email template: ' . $e->getMessage());
+            // Fallback to simple email
+            $subject = __('Set Your Password - CheapAlarms Portal', 'cheapalarms');
+            $html = '<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">';
+            $html .= '<div style="max-width: 600px; margin: 0 auto; padding: 20px;">';
+            $html .= '<h2 style="color: #2563eb;">Set Your Password</h2>';
+            $html .= '<p>Hi ' . esc_html($name) . ',</p>';
+            $html .= '<p>Click the button below to set your password and access your CheapAlarms portal:</p>';
+            $html .= '<p style="margin: 30px 0;">';
+            $html .= '<a href="' . esc_url($resetUrl) . '" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Set Your Password</a>';
+            $html .= '</p>';
+            $html .= '<p style="color: #666; font-size: 14px;">Or copy and paste this link into your browser:</p>';
+            $html .= '<p style="color: #666; font-size: 12px; word-break: break-all;">' . esc_html($resetUrl) . '</p>';
+            $html .= '<p style="color: #666; font-size: 14px; margin-top: 30px;">This link will expire in 24 hours.</p>';
+            $html .= '<p style="margin-top: 30px;">Thanks,<br />CheapAlarms Team</p>';
+            $html .= '</div></body></html>';
+        }
 
         $text = "Set Your Password\n\n";
         $text .= "Hi {$name},\n\n";
@@ -686,10 +725,12 @@ class PasswordResetController implements ControllerInterface
             }
         }
 
+        $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
         $this->logger->info('Sending password reset email via GHL', [
             'contactId' => $contactId,
             'email' => $email,
             'locationId' => $payload['locationId'] ?? 'not set',
+            'variation' => $variation,
         ]);
 
         // Pass locationId as header if available

@@ -161,6 +161,39 @@ class Plugin
         $this->registerFrontend();
         $this->registerAdminUi();
         $this->registerAdmin();
+        $this->registerUserTracking();
+    }
+
+    /**
+     * Register hooks for tracking user password and login status
+     * Used for context-aware email personalization
+     */
+    private function registerUserTracking(): void
+    {
+        // Track when password is set (via password reset flow)
+        add_action('after_password_reset', function($user, $new_password) {
+            if ($user && isset($user->ID)) {
+                update_user_meta($user->ID, 'ca_password_set_at', current_time('mysql'));
+            }
+        }, 10, 2);
+
+        // Track when user logs in
+        add_action('wp_login', function($user_login, $user) {
+            if ($user && isset($user->ID)) {
+                update_user_meta($user->ID, 'ca_last_login', current_time('mysql'));
+                // Also set password_set_at if not already set (user logged in = has password)
+                if (!get_user_meta($user->ID, 'ca_password_set_at', true)) {
+                    update_user_meta($user->ID, 'ca_password_set_at', current_time('mysql'));
+                }
+            }
+        }, 10, 2);
+
+        // Track password set via wp_set_password action (WordPress 6.2+)
+        add_action('wp_set_password', function($password, $user_id, $old_user_data) {
+            if ($user_id) {
+                update_user_meta($user_id, 'ca_password_set_at', current_time('mysql'));
+            }
+        }, 10, 3);
     }
 
     private function registerServices(): void
@@ -253,6 +286,9 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\StripeService::class, fn () => new \CheapAlarms\Plugin\Services\StripeService(
             $this->container->get(Config::class),
             $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\EmailTemplateService::class, fn () => new \CheapAlarms\Plugin\Services\EmailTemplateService(
+            $this->container->get(Config::class)
         ));
     }
 

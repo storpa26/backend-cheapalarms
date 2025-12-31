@@ -41,6 +41,9 @@ use function rawurlencode;
 use function esc_url;
 use function esc_html;
 use function __;
+use function get_transient;
+use function set_transient;
+use function delete_transient;
 
 /**
  * Public Quote Request Controller
@@ -99,6 +102,64 @@ class QuoteRequestController implements ControllerInterface
                 'error' => 'Missing required fields: firstName, lastName, email',
             ], 400);
         }
+
+        // Define lock key BEFORE using it (needed for duplicate prevention)
+        $lockKey = 'ca_quote_request_lock_' . md5($email);
+
+        // DUPLICATE PREVENTION: Check if same email recently created an estimate
+        // Use email-based lock (60 seconds) to prevent duplicate quote requests
+        $lockValue = get_transient($lockKey);
+        
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 60 seconds - previous request completed/failed)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 60) {
+                // Lock is stale - clear it and proceed
+                delete_transient($lockKey);
+            } else {
+                // Lock is active - check if estimate was actually created
+                $userId = email_exists($email);
+                if ($userId) {
+                    $recentEstimateIds = get_user_meta($userId, 'ca_estimate_ids', true);
+                    if (is_array($recentEstimateIds) && !empty($recentEstimateIds)) {
+                        // Check if most recent estimate was created in last 60 seconds
+                        $mostRecentEstimateId = end($recentEstimateIds);
+                        $metaKey = "ca_portal_meta_{$mostRecentEstimateId}";
+                        $recentMeta = get_option($metaKey, '{}');
+                        $meta = json_decode($recentMeta, true);
+                        
+                        if (is_array($meta)) {
+                            $createdAt = $meta['quote']['createdAt'] ?? $meta['workflow']['createdAt'] ?? null;
+                            if ($createdAt) {
+                                $createdTimestamp = strtotime($createdAt);
+                                $timeSinceCreation = time() - $createdTimestamp;
+                                
+                                if ($timeSinceCreation < 60) {
+                                    // Recent estimate found - duplicate request
+                                    return new WP_REST_Response([
+                                        'ok' => false,
+                                        'error' => 'A quote request was recently submitted for this email. Please check your inbox. If you need another quote, please wait a moment and try again.',
+                                        'code' => 'duplicate_request',
+                                        'retryAfter' => 60 - $timeSinceCreation,
+                                    ], 429); // 429 Too Many Requests
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Lock is active but no recent estimate found - might be processing
+                return new WP_REST_Response([
+                    'ok' => false,
+                    'error' => 'A quote request is currently being processed for this email. Please wait a moment and check your email.',
+                    'code' => 'duplicate_request',
+                    'retryAfter' => 60 - $lockAge,
+                ], 429);
+            }
+        }
+        
+        // Set lock with timestamp (60 second expiry)
+        set_transient($lockKey, time(), 60);
 
         // Validate items
         $items = $body['items'] ?? [];
@@ -422,76 +483,124 @@ class QuoteRequestController implements ControllerInterface
                 ], 500);
             }
 
-            // Step 4: Automatically send estimate via GHL
+            // Step 4: Update workflow status (skip auto-sending estimate email - we'll send consolidated quote request email below)
+            // Note: sendEstimate() should only be used for manual admin resends, not for new quote requests
+            // This prevents duplicate emails (estimate email + quote request email)
             try {
-                $sendResult = $this->estimateService->sendEstimate($estimateId, $effectiveLocationId, [
-                    'method' => 'email',
-                ]);
-                
-                if (is_wp_error($sendResult)) {
-                    // Log error but don't fail the request (estimate was created successfully)
-                    error_log('[CheapAlarms][WARNING] Failed to auto-send estimate after quote request: ' . $sendResult->get_error_message());
-                } else {
-                    // Update workflow status to 'sent' after successful send
-                    $stored = get_option("ca_portal_meta_{$estimateId}", '{}');
-                    $meta = json_decode($stored, true);
-                    if (is_array($meta)) {
-                        // Ensure workflow and quote arrays exist
-                        if (!isset($meta['workflow'])) {
-                            $meta['workflow'] = [];
-                        }
-                        if (!isset($meta['quote'])) {
-                            $meta['quote'] = [];
-                        }
-                        $meta['workflow']['status'] = 'sent';
-                        $meta['workflow']['currentStep'] = 2;
-                        $meta['quote']['status'] = 'sent';
-                        $meta['quote']['statusLabel'] = 'Sent';
-                        $meta['quote']['sentAt'] = current_time('mysql');
-                        $meta['quote']['sendCount'] = 1;
-                        $meta['quote']['approval_requested'] = false; // Ensure approval is not requested on send
-                        
-                        // Store estimate snapshot data for fast dashboard loading
-                        // Fetch estimate data to get number and total
-                        $estimateData = $this->estimateService->getEstimate([
-                            'estimateId' => $estimateId,
-                            'locationId' => $effectiveLocationId,
-                        ]);
-                        if (!is_wp_error($estimateData)) {
-                            $meta['quote']['number'] = $estimateData['estimateNumber'] ?? $estimateId;
-                            $meta['quote']['total'] = $estimateData['total'] ?? 0;
-                            $meta['quote']['currency'] = $estimateData['currency'] ?? 'AUD';
-                            $meta['quote']['last_synced_at'] = current_time('mysql');
-                        }
-                        
-                        update_option("ca_portal_meta_{$estimateId}", wp_json_encode($meta));
+                // Update workflow status to 'sent' without sending email
+                $stored = get_option("ca_portal_meta_{$estimateId}", '{}');
+                $meta = json_decode($stored, true);
+                if (is_array($meta)) {
+                    // Ensure workflow and quote arrays exist
+                    if (!isset($meta['workflow'])) {
+                        $meta['workflow'] = [];
                     }
+                    if (!isset($meta['quote'])) {
+                        $meta['quote'] = [];
+                    }
+                    $meta['workflow']['status'] = 'sent';
+                    $meta['workflow']['currentStep'] = 2;
+                    $meta['quote']['status'] = 'sent';
+                    $meta['quote']['statusLabel'] = 'Sent';
+                    $meta['quote']['sentAt'] = current_time('mysql');
+                    $meta['quote']['sendCount'] = 1;
+                    $meta['quote']['approval_requested'] = false; // Ensure approval is not requested on send
+                    
+                    // Store estimate snapshot data for fast dashboard loading
+                    // Fetch estimate data to get number and total
+                    $estimateData = $this->estimateService->getEstimate([
+                        'estimateId' => $estimateId,
+                        'locationId' => $effectiveLocationId,
+                    ]);
+                    if (!is_wp_error($estimateData)) {
+                        $meta['quote']['number'] = $estimateData['estimateNumber'] ?? $estimateId;
+                        $meta['quote']['total'] = $estimateData['total'] ?? 0;
+                        $meta['quote']['currency'] = $estimateData['currency'] ?? 'AUD';
+                        $meta['quote']['last_synced_at'] = current_time('mysql');
+                    }
+                    
+                    update_option("ca_portal_meta_{$estimateId}", wp_json_encode($meta));
                 }
             } catch (\Exception $e) {
                 // Log but don't fail - estimate creation succeeded
-                error_log('[CheapAlarms][WARNING] Exception auto-sending estimate: ' . $e->getMessage());
+                error_log('[CheapAlarms][WARNING] Exception updating workflow status: ' . $e->getMessage());
             }
 
-            // Send invitation email via GHL Conversations API
+            // Send context-aware invitation email via GHL Conversations API
             $displayName = trim("{$firstName} {$lastName}");
-            $subject = __('Your CheapAlarms quote is ready', 'cheapalarms');
             
-            $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
-            $message = '<p>' . $greeting . '</p>';
-            $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to set your password and access your estimate:', 'cheapalarms')) . '</p>';
+            // Get user context for email personalization
+            $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email, $estimateId);
             
-            // Primary action: Set password button (account creation)
-            if ($resetUrl) {
-                $message .= '<p><a href="' . esc_url($resetUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Set Your Password', 'cheapalarms')) . '</a></p>';
+            // Get estimate number for email
+            $estimateNumber = $estimateId; // Fallback to estimateId
+            try {
+                $estimateData = $this->estimateService->getEstimate([
+                    'estimateId' => $estimateId,
+                    'locationId' => $effectiveLocationId,
+                ]);
+                if (!is_wp_error($estimateData) && is_array($estimateData)) {
+                    $estimateNumber = $estimateData['estimateNumber'] ?? $estimateId;
+                } elseif (is_wp_error($estimateData)) {
+                    error_log('[CheapAlarms][WARNING] Failed to fetch estimate number for email: ' . $estimateData->get_error_message());
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][WARNING] Exception fetching estimate number for email: ' . $e->getMessage());
+                // Use estimateId as fallback
             }
             
-            // Secondary action: Guest access option
-            if ($portalUrl) {
-                $message .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($portalUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('see your estimate as a guest', 'cheapalarms')) . '</a></p>';
-            }
+            // Get frontend URL for login link
+            $frontendUrl = $this->config->getFrontendUrl();
+            $loginUrl = trailingslashit($frontendUrl) . 'login';
             
-            $message .= '<p>' . esc_html(__('This invite link remains active for 7 days. If it expires, contact us and we will resend it.', 'cheapalarms')) . '</p>';
-            $message .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            // Initialize emailTemplate variable (may be null if rendering fails)
+            $emailTemplate = null;
+            
+            // Render context-aware email template
+            try {
+                $emailTemplateService = $this->container->get(\CheapAlarms\Plugin\Services\EmailTemplateService::class);
+                $emailData = [
+                    'customerName' => $displayName,
+                    'estimateNumber' => $estimateNumber,
+                    'portalUrl' => $portalUrl,
+                    'resetUrl' => $resetUrl,
+                    'loginUrl' => $loginUrl,
+                ];
+                
+                $emailTemplate = $emailTemplateService->renderQuoteRequestEmail($userContext, $emailData);
+                $subject = $emailTemplate['subject'] ?? __('Your CheapAlarms quote is ready', 'cheapalarms');
+                $message = $emailTemplate['body'] ?? '';
+                
+                // Fallback if template rendering failed
+                if (empty($message)) {
+                    error_log('[CheapAlarms][WARNING] Email template returned empty body, using fallback');
+                    $subject = __('Your CheapAlarms quote is ready', 'cheapalarms');
+                    $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
+                    $message = '<p>' . $greeting . '</p>';
+                    $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to set your password and access your estimate:', 'cheapalarms')) . '</p>';
+                    if ($resetUrl) {
+                        $message .= '<p><a href="' . esc_url($resetUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Set Your Password', 'cheapalarms')) . '</a></p>';
+                    }
+                    if ($portalUrl) {
+                        $message .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($portalUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('see your estimate as a guest', 'cheapalarms')) . '</a></p>';
+                    }
+                    $message .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+                }
+            } catch (\Exception $e) {
+                error_log('[CheapAlarms][ERROR] Failed to render email template: ' . $e->getMessage());
+                // Fallback to simple email
+                $subject = __('Your CheapAlarms quote is ready', 'cheapalarms');
+                $greeting = sprintf(__('Hi %s,', 'cheapalarms'), esc_html($displayName));
+                $message = '<p>' . $greeting . '</p>';
+                $message .= '<p>' . esc_html(__('We have prepared your quote. Click the button below to set your password and access your estimate:', 'cheapalarms')) . '</p>';
+                if ($resetUrl) {
+                    $message .= '<p><a href="' . esc_url($resetUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Set Your Password', 'cheapalarms')) . '</a></p>';
+                }
+                if ($portalUrl) {
+                    $message .= '<p style="margin-top: 16px; color: #64748b; font-size: 14px;">' . esc_html(__('or', 'cheapalarms')) . ' <a href="' . esc_url($portalUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('see your estimate as a guest', 'cheapalarms')) . '</a></p>';
+                }
+                $message .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
             
             // Send via GHL Conversations API
             $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
@@ -511,12 +620,15 @@ class QuoteRequestController implements ControllerInterface
             $emailSent = !is_wp_error($emailResult);
             
             if ($emailSent) {
-                error_log('[CheapAlarms][INFO] Quote invitation email sent via GHL to: ' . $email);
+                $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
+                error_log('[CheapAlarms][INFO] Quote invitation email sent via GHL to: ' . $email . ' (variation: ' . $variation . ')');
             } else {
                 error_log('Failed to send GHL email to: ' . $email . ' - ' . ($emailResult instanceof WP_Error ? $emailResult->get_error_message() : 'Unknown error'));
             }
 
-            // Success!
+            // Success! Keep the lock for full 60 seconds to prevent duplicate submissions
+            // (Don't clear it - let it expire naturally)
+            
             return new WP_REST_Response([
                 'ok' => true,
                 'contactId' => $contactId,
@@ -528,6 +640,9 @@ class QuoteRequestController implements ControllerInterface
             ], 200);
 
         } catch (\Exception $e) {
+            // Clear lock on error so user can retry
+            delete_transient($lockKey);
+            
             error_log('Quote request error: ' . $e->getMessage());
             
             return new WP_REST_Response([
@@ -535,6 +650,61 @@ class QuoteRequestController implements ControllerInterface
                 'error' => 'An unexpected error occurred. Please try again.',
             ], 500);
         }
+    }
+
+    /**
+     * Standardized response handler
+     * 
+     * @param array|WP_Error $result
+     * @return WP_REST_Response
+     */
+    private function respond($result): WP_REST_Response
+    {
+        if (is_wp_error($result)) {
+            return $this->errorResponse($result);
+        }
+
+        if (!isset($result['ok'])) {
+            $result['ok'] = true;
+        }
+
+        $response = new WP_REST_Response($result, 200);
+        $this->addSecurityHeaders($response);
+        return $response;
+    }
+
+    /**
+     * Create standardized error response with sanitization
+     *
+     * @param WP_Error $error
+     * @return WP_REST_Response
+     */
+    private function errorResponse(WP_Error $error): WP_REST_Response
+    {
+        $status = $error->get_error_data()['status'] ?? 500;
+        $code = $error->get_error_code();
+        $message = $error->get_error_message();
+
+        $response = new WP_REST_Response([
+            'ok' => false,
+            'error' => $message,
+            'code' => $code,
+        ], $status);
+
+        $this->addSecurityHeaders($response);
+        return $response;
+    }
+
+    /**
+     * Add security headers to response
+     *
+     * @param WP_REST_Response $response
+     */
+    private function addSecurityHeaders(WP_REST_Response $response): void
+    {
+        $response->header('X-Content-Type-Options', 'nosniff');
+        $response->header('X-Frame-Options', 'DENY');
+        $response->header('X-XSS-Protection', '1; mode=block');
     }
 }
 

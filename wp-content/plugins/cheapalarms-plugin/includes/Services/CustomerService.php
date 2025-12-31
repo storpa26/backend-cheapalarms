@@ -149,19 +149,49 @@ class CustomerService
             );
         }
 
-        $subject = __('Your CheapAlarms portal is ready', 'cheapalarms');
-        $headers = ['Content-Type: text/html; charset=UTF-8'];
-        $greeting = sprintf(__('Hi %s,', 'cheapalarms'), $name);
+        // Get user context for email personalization
+        $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email);
 
-        $body = '<p>' . esc_html($greeting) . '</p>';
-        $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the links below to access your portal.', 'cheapalarms')) . '</p>';
-        $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Access your portal', 'cheapalarms')) . '</a></p>';
-        
-        if ($resetUrl) {
-            $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+        // Render context-aware email template
+        $emailTemplate = null;
+        try {
+            $emailTemplateService = $this->container->get(\CheapAlarms\Plugin\Services\EmailTemplateService::class);
+            $emailData = [
+                'customerName' => $name,
+                'portalUrl' => $portalUrl,
+                'resetUrl' => $resetUrl,
+                'isResend' => false,
+                'estimateNumber' => '',
+            ];
+
+            $emailTemplate = $emailTemplateService->renderPortalInviteEmail($userContext, $emailData);
+            $subject = $emailTemplate['subject'] ?? __('Your CheapAlarms portal is ready', 'cheapalarms');
+            $body = $emailTemplate['body'] ?? '';
+
+            // Fallback if template rendering failed
+            if (empty($body)) {
+                error_log('[CheapAlarms][WARNING] Portal invite email template returned empty body, using fallback');
+                $subject = __('Your CheapAlarms portal is ready', 'cheapalarms');
+                $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $name)) . '</p>';
+                $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the links below to access your portal.', 'cheapalarms')) . '</p>';
+                $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Access your portal', 'cheapalarms')) . '</a></p>';
+                if ($resetUrl) {
+                    $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+                }
+                $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
+            }
+        } catch (\Exception $e) {
+            error_log('[CheapAlarms][ERROR] Failed to render portal invite email template: ' . $e->getMessage());
+            // Fallback to simple email
+            $subject = __('Your CheapAlarms portal is ready', 'cheapalarms');
+            $body = '<p>' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $name)) . '</p>';
+            $body .= '<p>' . esc_html(__('We have prepared your CheapAlarms portal. Use the links below to access your portal.', 'cheapalarms')) . '</p>';
+            $body .= '<p><a href="' . esc_url($portalUrl) . '" style="display: inline-block; padding: 12px 24px; background-color: #c95375; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">' . esc_html(__('Access your portal', 'cheapalarms')) . '</a></p>';
+            if ($resetUrl) {
+                $body .= '<p><a href="' . esc_url($resetUrl) . '" style="color: #2fb6c9; text-decoration: underline;">' . esc_html(__('Set your password', 'cheapalarms')) . '</a></p>';
+            }
+            $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
         }
-        
-        $body .= '<p>' . esc_html(__('Thanks,', 'cheapalarms')) . '<br />' . esc_html(__('CheapAlarms Team', 'cheapalarms')) . '</p>';
 
         // Send via GHL
         $sent = false;
