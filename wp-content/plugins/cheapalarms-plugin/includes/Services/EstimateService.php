@@ -235,7 +235,7 @@ class EstimateService
     /**
      * @return array|WP_Error
      */
-    public function createEstimate(array $payload)
+    public function createEstimate(array $payload, int $timeout = 10, int $maxRetries = 1, bool $skipAppendTerms = false)
     {
         if (empty($payload['altId'])) {
             $payload['altId'] = $this->config->getLocationId();
@@ -244,13 +244,14 @@ class EstimateService
             $payload['altType'] = 'location';
         }
 
-        $response = $this->client->post('/invoices/estimate', $payload);
+        // Allow caller to control timeout/retries (quote flow needs shorter timeout, no retry)
+        $response = $this->client->post('/invoices/estimate', $payload, $timeout, null, $maxRetries);
         if (is_wp_error($response)) {
             return $response;
         }
 
         $newId = $response['estimate']['id'] ?? $response['id'] ?? $response['_id'] ?? null;
-        if ($newId) {
+        if ($newId && !$skipAppendTerms) {
             $noteHtml = $this->buildPhotoBanner($newId);
             $this->appendTermsSafely($newId, $payload['altId'], $noteHtml, $payload['termsNotes'] ?? null);
         }

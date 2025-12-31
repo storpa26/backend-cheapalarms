@@ -225,15 +225,20 @@ class QuoteRequestController implements ControllerInterface
                 $contactPayload['country'] = $address['country'] ?? 'AU';
             }
 
-            $contactResult = $this->ghlClient->post('/contacts/', $contactPayload);
+            // Use shorter timeout for contact creation to keep UX snappy on submit
+            $contactResult = $this->ghlClient->post('/contacts/', $contactPayload, 8, $effectiveLocationId);
             
             if (is_wp_error($contactResult)) {
-                // Check for duplicate contact (GHL returns 400 with contactId in meta)
+                // Handle duplicate contact errors safely:
+                // - If duplicate is by EMAIL, reuse existing contactId (safe).
+                // - If duplicate is by PHONE, DO NOT auto-merge (unsafe); return a friendly conflict.
                 $errorData = $contactResult->get_error_data();
                 $errorCode = $contactResult->get_error_code();
-                
+
                 $contactId = null;
-                if ($errorCode === 'ghl_http_error' && isset($errorData['code']) && $errorData['code'] === 400) {
+                $matchingField = null;
+
+                if ($errorCode === 'ghl_http_error' && isset($errorData['code']) && (int)$errorData['code'] === 400) {
                     $errorBody = $errorData['body'] ?? null;
                     if (is_string($errorBody)) {
                         $decoded = json_decode($errorBody, true);
@@ -241,12 +246,82 @@ class QuoteRequestController implements ControllerInterface
                             $errorBody = $decoded;
                         }
                     }
-                    
+
                     if (is_array($errorBody)) {
                         $contactId = $errorBody['meta']['contactId'] ?? null;
+                        $matchingField = $errorBody['meta']['matchingField'] ?? null;
+                    }
+
+                    // If GHL indicates phone-based duplication, don't auto-merge.
+                    if (!empty($contactId) && is_string($matchingField) && strtolower($matchingField) === 'phone') {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'This phone number is already linked to another account. Please use the email you used previously, or contact support.',
+                            'code' => 'phone_conflict',
+                        ], 409);
+                    }
+
+                    // If GHL indicates email-based duplication, it's safe to reuse.
+                    if (!empty($contactId) && is_string($matchingField) && strtolower($matchingField) === 'email') {
+                        // safe path: reuse $contactId
+                    } elseif (!empty($contactId) && empty($matchingField)) {
+                        // Defensive: if matchingField is missing, verify by searching contacts by email (fast, no retry).
+                        // Fail CLOSED: if we cannot confirm it's an email-duplicate, we return a friendly conflict.
+                        // Also: prefer the contactId returned by search (stronger than trusting meta.contactId).
+                        $foundByEmail = false;
+                        $contactIdFromSearch = null;
+                        try {
+                            $search = $this->ghlClient->get('/contacts/search', [
+                                'locationId' => $effectiveLocationId,
+                                'query' => $email,
+                            ], 5, $effectiveLocationId, 0);
+
+                            if (is_wp_error($search)) {
+                                return new WP_REST_Response([
+                                    'ok' => false,
+                                    'error' => 'We found an existing contact that conflicts with the details you entered. Please use the email you used previously or contact support.',
+                                    'code' => 'contact_conflict',
+                                ], 409);
+                            }
+
+                            $contacts = $search['contacts'] ?? $search['items'] ?? [];
+                            foreach ((array)$contacts as $c) {
+                                $cEmail = $c['email'] ?? '';
+                                if ($cEmail && strcasecmp((string)$cEmail, (string)$email) === 0) {
+                                    $foundByEmail = true;
+                                    $contactIdFromSearch = $c['id'] ?? ($c['contactId'] ?? null);
+                                    break;
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'We found an existing contact that conflicts with the details you entered. Please use the email you used previously or contact support.',
+                                'code' => 'contact_conflict',
+                            ], 409);
+                        }
+
+                        if (!$foundByEmail) {
+                            return new WP_REST_Response([
+                                'ok' => false,
+                                'error' => 'We found an existing contact with this email/phone combination, but couldn’t safely confirm it’s the same person. Please use the email you used previously or contact support.',
+                                'code' => 'contact_conflict',
+                            ], 409);
+                        }
+
+                        if (!empty($contactIdFromSearch)) {
+                            $contactId = $contactIdFromSearch;
+                        }
+                    } elseif (!empty($contactId) && is_string($matchingField) && $matchingField !== '') {
+                        // Unknown matching field - treat as conflict to avoid wrong merge.
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'We found an existing contact that conflicts with the details you entered. Please use the email you used previously or contact support.',
+                            'code' => 'contact_conflict',
+                        ], 409);
                     }
                 }
-                
+
                 if (empty($contactId)) {
                     return new WP_REST_Response([
                         'ok' => false,
@@ -318,8 +393,8 @@ class QuoteRequestController implements ControllerInterface
                 $estimateData['termsNotes'] = "Property Profile: {$propertyProfile}";
             }
 
-            // createEstimate only accepts one parameter (payload)
-            $estimateResult = $this->estimateService->createEstimate($estimateData);
+            // Use shorter timeout, no retry, and skip the slow post-create PUT for public quote flow
+            $estimateResult = $this->estimateService->createEstimate($estimateData, 8, 0, true);
             
             if (is_wp_error($estimateResult)) {
                 return new WP_REST_Response([
@@ -339,6 +414,9 @@ class QuoteRequestController implements ControllerInterface
             // Extract ID from nested response structure
             $response = $estimateResult['result'] ?? [];
             $estimateId = $response['estimate']['id'] ?? $response['id'] ?? $response['_id'] ?? null;
+            $estimateNumberFromCreate = $response['estimate']['estimateNumber'] ?? $response['estimateNumber'] ?? null;
+            $estimateTotalFromCreate = $response['estimate']['total'] ?? $response['total'] ?? null;
+            $estimateCurrencyFromCreate = $response['estimate']['currency'] ?? $response['currency'] ?? 'AUD';
             
             if (!$estimateId) {
                 return new WP_REST_Response([
@@ -506,18 +584,11 @@ class QuoteRequestController implements ControllerInterface
                     $meta['quote']['sendCount'] = 1;
                     $meta['quote']['approval_requested'] = false; // Ensure approval is not requested on send
                     
-                    // Store estimate snapshot data for fast dashboard loading
-                    // Fetch estimate data to get number and total
-                    $estimateData = $this->estimateService->getEstimate([
-                        'estimateId' => $estimateId,
-                        'locationId' => $effectiveLocationId,
-                    ]);
-                    if (!is_wp_error($estimateData)) {
-                        $meta['quote']['number'] = $estimateData['estimateNumber'] ?? $estimateId;
-                        $meta['quote']['total'] = $estimateData['total'] ?? 0;
-                        $meta['quote']['currency'] = $estimateData['currency'] ?? 'AUD';
-                        $meta['quote']['last_synced_at'] = current_time('mysql');
-                    }
+                    // Store estimate snapshot data for fast dashboard loading using creation response (no extra GHL call)
+                    $meta['quote']['number'] = $estimateNumberFromCreate ?? $estimateId;
+                    $meta['quote']['total'] = $estimateTotalFromCreate ?? 0;
+                    $meta['quote']['currency'] = $estimateCurrencyFromCreate ?? 'AUD';
+                    $meta['quote']['last_synced_at'] = current_time('mysql');
                     
                     update_option("ca_portal_meta_{$estimateId}", wp_json_encode($meta));
                 }
@@ -532,22 +603,8 @@ class QuoteRequestController implements ControllerInterface
             // Get user context for email personalization
             $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email, $estimateId);
             
-            // Get estimate number for email
-            $estimateNumber = $estimateId; // Fallback to estimateId
-            try {
-                $estimateData = $this->estimateService->getEstimate([
-                    'estimateId' => $estimateId,
-                    'locationId' => $effectiveLocationId,
-                ]);
-                if (!is_wp_error($estimateData) && is_array($estimateData)) {
-                    $estimateNumber = $estimateData['estimateNumber'] ?? $estimateId;
-                } elseif (is_wp_error($estimateData)) {
-                    error_log('[CheapAlarms][WARNING] Failed to fetch estimate number for email: ' . $estimateData->get_error_message());
-                }
-            } catch (\Exception $e) {
-                error_log('[CheapAlarms][WARNING] Exception fetching estimate number for email: ' . $e->getMessage());
-                // Use estimateId as fallback
-            }
+            // Get estimate number for email (use creation response, avoid extra GHL call)
+            $estimateNumber = $estimateNumberFromCreate ?? $estimateId; // Fallback to estimateId
             
             // Get frontend URL for login link
             $frontendUrl = $this->config->getFrontendUrl();
