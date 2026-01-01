@@ -10,6 +10,7 @@ use CheapAlarms\Plugin\REST\Controllers\UploadController;
 use CheapAlarms\Plugin\REST\Controllers\ProductsController;
 use CheapAlarms\Plugin\REST\Controllers\ServiceM8Controller;
 use CheapAlarms\Plugin\REST\Controllers\GhlController;
+use CheapAlarms\Plugin\REST\Controllers\AdminGhlContactsController;
 use CheapAlarms\Plugin\REST\Controllers\UsersController;
 use CheapAlarms\Plugin\REST\Controllers\AdminEstimateController;
 use CheapAlarms\Plugin\REST\Controllers\AdminInvoiceController;
@@ -38,6 +39,7 @@ class ApiKernel
             new UsersController($this->container),
             new AdminEstimateController($this->container),
             new AdminInvoiceController($this->container),
+            new AdminGhlContactsController($this->container),
             new QuoteRequestController($this->container),
             new XeroController($this->container),
             new StripeController($this->container),

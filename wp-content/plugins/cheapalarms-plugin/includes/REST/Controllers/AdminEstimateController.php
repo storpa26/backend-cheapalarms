@@ -165,6 +165,25 @@ class AdminEstimateController extends AdminController
             ],
         ]);
 
+        register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)/delete', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->deleteEstimate($request);
+            },
+            'args'                => [
+                'estimateId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
+
         // Non-blocking snapshot refresh for admin lists (WP-Cron).
         register_rest_route('ca/v1', '/admin/estimates/sync-snapshots', [
             'methods'             => 'POST',
@@ -696,6 +715,205 @@ class AdminEstimateController extends AdminController
         $result = $this->portalService->requestChanges($estimateId, $locationId, $note);
 
         return $this->respond($result);
+    }
+
+    /**
+     * Delete estimate with scope support (local, ghl, both).
+     * Fail-closed: if scope=both and GHL delete fails, local delete is skipped.
+     */
+    public function deleteEstimate(WP_REST_Request $request): WP_REST_Response
+    {
+        // Safety gate
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $estimateId = sanitize_text_field($request->get_param('estimateId'));
+        $body = $request->get_json_params() ?? [];
+        $scope = sanitize_text_field($body['scope'] ?? 'both');
+        $confirm = sanitize_text_field($body['confirm'] ?? '');
+        $locationId = $this->resolveLocationIdOptional($request) ?: sanitize_text_field($body['locationId'] ?? '');
+
+        // Validation
+        if (empty($estimateId)) {
+            return $this->respond(new WP_Error('bad_request', __('Estimate ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!in_array($scope, ['local', 'ghl', 'both'], true)) {
+            return $this->respond(new WP_Error('bad_request', __('Invalid scope. Must be: local, ghl, or both.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if ($confirm !== 'DELETE') {
+            return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="DELETE" in request body.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+        $user = wp_get_current_user();
+        $correlationId = wp_generate_password(12, false);
+
+        $logger->info('Estimate delete initiated', [
+            'correlationId' => $correlationId,
+            'estimateId' => $estimateId,
+            'scope' => $scope,
+            'userId' => $user->ID ?? null,
+            'userEmail' => $user->user_email ?? null,
+        ]);
+
+        $result = [
+            'ok' => true,
+            'scope' => $scope,
+            'correlationId' => $correlationId,
+            'local' => ['ok' => false, 'skipped' => true],
+            'ghl' => ['ok' => false, 'skipped' => true],
+        ];
+
+        // Determine execution order: for "both", do GHL first (fail-closed)
+        $doGhl = ($scope === 'ghl' || $scope === 'both');
+        $doLocal = ($scope === 'local' || ($scope === 'both'));
+
+        // Step 1: GHL delete (if needed, and first for fail-closed)
+        if ($doGhl) {
+            if (empty($locationId)) {
+                return $this->respond(new WP_Error('missing_location', __('locationId is required for GHL delete.', 'cheapalarms'), ['status' => 400]));
+            }
+            $ghlClient = $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class);
+            $ghlResult = $ghlClient->delete(
+                '/invoices/estimate/' . rawurlencode($estimateId),
+                ['altId' => $locationId, 'altType' => 'location'],
+                $locationId,
+                10,
+                0
+            );
+
+            if (is_wp_error($ghlResult)) {
+                $errorData = $ghlResult->get_error_data();
+                $result['ghl'] = [
+                    'ok' => false,
+                    'error' => $ghlResult->get_error_message(),
+                    'code' => $ghlResult->get_error_code(),
+                    'httpCode' => $errorData['code'] ?? null,
+                ];
+                $result['ok'] = false;
+
+                // Fail-closed: if GHL fails and scope=both, skip local delete
+                if ($scope === 'both') {
+                    $result['local']['skipped'] = true;
+                    $logger->warning('Estimate delete failed (fail-closed)', [
+                        'correlationId' => $correlationId,
+                        'estimateId' => $estimateId,
+                        'ghlError' => $ghlResult->get_error_message(),
+                    ]);
+                    return $this->respond(new WP_Error(
+                        'delete_partial_failure',
+                        'Delete operation completed with errors.',
+                        ['status' => 500, 'details' => $result]
+                    ));
+                }
+            } else {
+                $result['ghl'] = [
+                    'ok' => true,
+                    'alreadyDeleted' => $ghlResult['alreadyDeleted'] ?? false,
+                ];
+                $logger->info('Estimate deleted from GHL', [
+                    'correlationId' => $correlationId,
+                    'estimateId' => $estimateId,
+                    'alreadyDeleted' => $result['ghl']['alreadyDeleted'],
+                ]);
+            }
+        }
+
+        // Step 2: Local delete (if needed, and GHL succeeded or scope=local)
+        if ($doLocal && !($scope === 'both' && !$result['ghl']['ok'])) {
+            $localResult = $this->deleteEstimateLocal($estimateId);
+            if (is_wp_error($localResult)) {
+                $result['local'] = [
+                    'ok' => false,
+                    'error' => $localResult->get_error_message(),
+                ];
+                $result['ok'] = false;
+            } else {
+                $result['local'] = [
+                    'ok' => true,
+                    'alreadyDeleted' => $localResult['alreadyDeleted'] ?? false,
+                ];
+                $logger->info('Estimate deleted from WordPress', [
+                    'correlationId' => $correlationId,
+                    'estimateId' => $estimateId,
+                    'alreadyDeleted' => $result['local']['alreadyDeleted'],
+                ]);
+            }
+        }
+
+        if (!$result['ok']) {
+            return $this->respond(new WP_Error(
+                'delete_partial_failure',
+                'Delete operation completed with errors.',
+                ['status' => 500, 'details' => $result]
+            ));
+        }
+
+        return $this->respond($result);
+    }
+
+    /**
+     * Delete estimate from WordPress (local delete).
+     *
+     * @param string $estimateId
+     * @return array|WP_Error
+     */
+    private function deleteEstimateLocal(string $estimateId)
+    {
+        global $wpdb;
+
+        $alreadyDeleted = true;
+        $deleted = [];
+
+        // 1. Delete portal meta option
+        $optionName = 'ca_portal_meta_' . $estimateId;
+        $metaDeleted = delete_option($optionName);
+        if ($metaDeleted) {
+            $alreadyDeleted = false;
+            $deleted[] = 'portal_meta';
+        }
+
+        // 2. Delete snapshot rows
+        $snapshotResult = $this->snapshotRepo->deleteByEstimateId($estimateId);
+        if (is_wp_error($snapshotResult)) {
+            // Log but don't fail if snapshot delete fails (might not exist)
+            error_log('Failed to delete snapshot for estimate ' . $estimateId . ': ' . $snapshotResult->get_error_message());
+        } else {
+            $deleted[] = 'snapshots';
+        }
+
+        // 3. Clean up user meta linkage (find users with this estimateId)
+        $users = $wpdb->get_col($wpdb->prepare(
+            "SELECT user_id FROM {$wpdb->usermeta} 
+             WHERE meta_key = 'ca_estimate_ids' 
+             AND meta_value LIKE %s",
+            '%' . $wpdb->esc_like($estimateId) . '%'
+        ));
+
+        foreach ($users as $userId) {
+            $estimateIds = get_user_meta($userId, 'ca_estimate_ids', true);
+            if (is_array($estimateIds)) {
+                $estimateIds = array_filter($estimateIds, fn($id) => $id !== $estimateId);
+                update_user_meta($userId, 'ca_estimate_ids', array_values($estimateIds));
+            }
+
+            // Also clean up ca_estimate_locations
+            $locations = get_user_meta($userId, 'ca_estimate_locations', true);
+            if (is_array($locations) && isset($locations[$estimateId])) {
+                unset($locations[$estimateId]);
+                update_user_meta($userId, 'ca_estimate_locations', $locations);
+            }
+        }
+
+        return [
+            'ok' => true,
+            'alreadyDeleted' => $alreadyDeleted && empty($deleted),
+            'deleted' => $deleted,
+        ];
     }
 
 }

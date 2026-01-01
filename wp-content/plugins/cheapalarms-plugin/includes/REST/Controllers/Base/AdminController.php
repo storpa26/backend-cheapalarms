@@ -230,5 +230,29 @@ abstract class AdminController implements ControllerInterface
         // Referrer policy
         $response->header('Referrer-Policy', 'strict-origin-when-cross-origin');
     }
+
+    /**
+     * Check if destructive actions are enabled (safety gate).
+     * Requires CA_ENABLE_DESTRUCTIVE_ACTIONS=true environment variable.
+     *
+     * @return WP_Error|null Returns WP_Error if disabled, null if enabled
+     */
+    protected function checkDestructiveActionsEnabled(): ?WP_Error
+    {
+        $enabled = getenv('CA_ENABLE_DESTRUCTIVE_ACTIONS');
+        if ($enabled === false) {
+            $enabled = defined('CA_ENABLE_DESTRUCTIVE_ACTIONS') ? CA_ENABLE_DESTRUCTIVE_ACTIONS : false;
+        }
+        
+        if ($enabled !== 'true' && $enabled !== true) {
+            return new WP_Error(
+                'destructive_actions_disabled',
+                __('Destructive actions are disabled. Set CA_ENABLE_DESTRUCTIVE_ACTIONS=true to enable.', 'cheapalarms'),
+                ['status' => 403]
+            );
+        }
+        
+        return null;
+    }
 }
 

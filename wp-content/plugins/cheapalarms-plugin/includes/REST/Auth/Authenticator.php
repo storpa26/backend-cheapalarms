@@ -23,6 +23,7 @@ use function str_starts_with;
 use function time;
 use function wp_die;
 use function wp_json_encode;
+use function wp_get_current_user;
 use function wp_set_current_user;
 use function wp_verify_nonce;
 
@@ -45,6 +46,17 @@ class Authenticator
         if (!$this->config->isConfigured()) {
             wp_die(__('CheapAlarms plugin is not configured. Please set CA_GHL_TOKEN and CA_LOCATION_ID.', 'cheapalarms'), '', 500);
         }
+    }
+
+    /**
+     * Ensure user is loaded before capability checks.
+     * This fixes JWT authentication timing issues.
+     */
+    public function ensureUserLoaded(): void
+    {
+        global $current_user;
+        $current_user = null;
+        wp_get_current_user();
     }
 
     public function requireCapability(string $capability): bool|WP_Error

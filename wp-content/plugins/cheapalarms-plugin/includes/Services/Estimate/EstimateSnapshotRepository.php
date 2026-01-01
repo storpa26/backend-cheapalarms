@@ -172,6 +172,36 @@ class EstimateSnapshotRepository
 
         return is_string($val) ? $val : null;
     }
+
+    /**
+     * Delete snapshot rows for a specific estimate.
+     *
+     * @param string $estimateId Estimate ID to delete
+     * @return bool|WP_Error True on success, WP_Error on failure
+     */
+    public function deleteByEstimateId(string $estimateId)
+    {
+        global $wpdb;
+
+        if (!$estimateId) {
+            return new WP_Error('bad_request', 'estimateId is required', ['status' => 400]);
+        }
+
+        $deleted = $wpdb->delete(
+            $this->tableName,
+            ['estimate_id' => $estimateId],
+            ['%s']
+        );
+
+        if ($deleted === false) {
+            return new WP_Error('db_error', 'Failed to delete snapshot rows', [
+                'status'  => 500,
+                'details' => $wpdb->last_error,
+            ]);
+        }
+
+        return true;
+    }
 }
 
 

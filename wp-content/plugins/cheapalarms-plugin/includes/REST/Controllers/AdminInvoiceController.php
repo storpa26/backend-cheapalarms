@@ -77,6 +77,25 @@ class AdminInvoiceController extends AdminController
             ],
         ]);
 
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/delete', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->deleteInvoice($request);
+            },
+            'args'                => [
+                'invoiceId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
+
         register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/send', [
             'methods'             => 'POST',
             'permission_callback' => fn () => true,
@@ -343,6 +362,189 @@ class AdminInvoiceController extends AdminController
             'ok' => true,
             'message' => 'Invoice sent successfully',
         ]);
+    }
+
+    /**
+     * Delete invoice with scope support (local, ghl, both).
+     * Fail-closed: if scope=both and GHL delete fails, local delete is skipped.
+     */
+    public function deleteInvoice(WP_REST_Request $request): WP_REST_Response
+    {
+        // Safety gate
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $invoiceId = sanitize_text_field($request->get_param('invoiceId'));
+        $body = $request->get_json_params() ?? [];
+        $scope = sanitize_text_field($body['scope'] ?? 'both');
+        $confirm = sanitize_text_field($body['confirm'] ?? '');
+        $locationId = $this->resolveLocationIdOptional($request) ?: sanitize_text_field($body['locationId'] ?? '');
+
+        // Validation
+        if (empty($invoiceId)) {
+            return $this->respond(new WP_Error('bad_request', __('Invoice ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!in_array($scope, ['local', 'ghl', 'both'], true)) {
+            return $this->respond(new WP_Error('bad_request', __('Invalid scope. Must be: local, ghl, or both.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if ($confirm !== 'DELETE') {
+            return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="DELETE" in request body.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+        $user = wp_get_current_user();
+        $correlationId = wp_generate_password(12, false);
+
+        $logger->info('Invoice delete initiated', [
+            'correlationId' => $correlationId,
+            'invoiceId' => $invoiceId,
+            'scope' => $scope,
+            'userId' => $user->ID ?? null,
+            'userEmail' => $user->user_email ?? null,
+        ]);
+
+        $result = [
+            'ok' => true,
+            'scope' => $scope,
+            'correlationId' => $correlationId,
+            'local' => ['ok' => false, 'skipped' => true],
+            'ghl' => ['ok' => false, 'skipped' => true],
+        ];
+
+        // Determine execution order: for "both", do GHL first (fail-closed)
+        $doGhl = ($scope === 'ghl' || $scope === 'both');
+        $doLocal = ($scope === 'local' || ($scope === 'both'));
+
+        // Step 1: GHL delete (if needed, and first for fail-closed)
+        if ($doGhl) {
+            if (empty($locationId)) {
+                return $this->respond(new WP_Error('missing_location', __('locationId is required for GHL delete.', 'cheapalarms'), ['status' => 400]));
+            }
+            $ghlClient = $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class);
+            $ghlResult = $ghlClient->delete(
+                '/invoices/' . rawurlencode($invoiceId),
+                ['altId' => $locationId, 'altType' => 'location'],
+                $locationId,
+                10,
+                0
+            );
+
+            if (is_wp_error($ghlResult)) {
+                $errorData = $ghlResult->get_error_data();
+                $result['ghl'] = [
+                    'ok' => false,
+                    'error' => $ghlResult->get_error_message(),
+                    'code' => $ghlResult->get_error_code(),
+                    'httpCode' => $errorData['code'] ?? null,
+                ];
+                $result['ok'] = false;
+
+                // Fail-closed: if GHL fails and scope=both, skip local delete
+                if ($scope === 'both') {
+                    $result['local']['skipped'] = true;
+                    $logger->warning('Invoice delete failed (fail-closed)', [
+                        'correlationId' => $correlationId,
+                        'invoiceId' => $invoiceId,
+                        'ghlError' => $ghlResult->get_error_message(),
+                    ]);
+                    return $this->respond(new WP_Error(
+                        'delete_partial_failure',
+                        'Delete operation completed with errors.',
+                        ['status' => 500, 'details' => $result]
+                    ));
+                }
+            } else {
+                $result['ghl'] = [
+                    'ok' => true,
+                    'alreadyDeleted' => $ghlResult['alreadyDeleted'] ?? false,
+                ];
+                $logger->info('Invoice deleted from GHL', [
+                    'correlationId' => $correlationId,
+                    'invoiceId' => $invoiceId,
+                    'alreadyDeleted' => $result['ghl']['alreadyDeleted'],
+                ]);
+            }
+        }
+
+        // Step 2: Local delete (if needed, and GHL succeeded or scope=local)
+        if ($doLocal && !($scope === 'both' && !$result['ghl']['ok'])) {
+            $localResult = $this->deleteInvoiceLocal($invoiceId);
+            if (is_wp_error($localResult)) {
+                $result['local'] = [
+                    'ok' => false,
+                    'error' => $localResult->get_error_message(),
+                ];
+                $result['ok'] = false;
+            } else {
+                $result['local'] = [
+                    'ok' => true,
+                    'alreadyDeleted' => $localResult['alreadyDeleted'] ?? false,
+                ];
+                $logger->info('Invoice deleted from WordPress', [
+                    'correlationId' => $correlationId,
+                    'invoiceId' => $invoiceId,
+                    'linkedEstimateId' => $localResult['linkedEstimateId'] ?? null,
+                    'alreadyDeleted' => $result['local']['alreadyDeleted'],
+                ]);
+            }
+        }
+
+        if (!$result['ok']) {
+            return $this->respond(new WP_Error(
+                'delete_partial_failure',
+                'Delete operation completed with errors.',
+                ['status' => 500, 'details' => $result]
+            ));
+        }
+
+        return $this->respond($result);
+    }
+
+    /**
+     * Delete invoice from WordPress (local delete).
+     * Removes invoice reference from linked estimate's portal meta.
+     *
+     * @param string $invoiceId
+     * @return array|WP_Error
+     */
+    private function deleteInvoiceLocal(string $invoiceId)
+    {
+        // Find linked estimate
+        $linkedEstimateId = $this->findEstimateIdByInvoiceId($invoiceId);
+
+        if (!$linkedEstimateId) {
+            // Invoice not linked to any estimate = already "deleted" (not present in WP)
+            return [
+                'ok' => true,
+                'alreadyDeleted' => true,
+                'linkedEstimateId' => null,
+            ];
+        }
+
+        // Get portal meta and remove invoice section
+        $meta = $this->getPortalMeta($linkedEstimateId);
+        if (empty($meta['invoice']['id']) || $meta['invoice']['id'] !== $invoiceId) {
+            // Invoice ID doesn't match or not present = already unlinked
+            return [
+                'ok' => true,
+                'alreadyDeleted' => true,
+                'linkedEstimateId' => $linkedEstimateId,
+            ];
+        }
+
+        // Remove invoice from meta
+        unset($meta['invoice']);
+        $this->portalMeta->update($linkedEstimateId, $meta);
+
+        return [
+            'ok' => true,
+            'alreadyDeleted' => false,
+            'linkedEstimateId' => $linkedEstimateId,
+        ];
     }
 
 }

@@ -32,7 +32,11 @@ class PortalController implements ControllerInterface
     {
         $allowPortalOrInvite = function (WP_REST_Request $request) {
             // Allow if inviteToken is present (handled in callback with validateInviteToken)
-            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? $request->get_json_params()['inviteToken'] ?? '');
+            $payload = $request->get_json_params();
+            if (!is_array($payload)) {
+                $payload = [];
+            }
+            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? ($payload['inviteToken'] ?? ''));
             if (!empty($inviteToken)) {
                 return true;
             }
@@ -48,7 +52,11 @@ class PortalController implements ControllerInterface
 
         $requireCsrf = function (WP_REST_Request $request) {
             // Basic CSRF check for cookie-auth POSTs: require X-WP-Nonce header when no inviteToken is used
-            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? $request->get_json_params()['inviteToken'] ?? '');
+            $payload = $request->get_json_params();
+            if (!is_array($payload)) {
+                $payload = [];
+            }
+            $inviteToken = sanitize_text_field($request->get_param('inviteToken') ?? ($payload['inviteToken'] ?? ''));
             if (!empty($inviteToken)) {
                 return true; // invite links act as bearer tokens
             }

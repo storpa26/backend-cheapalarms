@@ -189,6 +189,140 @@ class GhlClient
     }
 
     /**
+     * Perform a DELETE request.
+     * Returns success for 200-299 and 404 (already deleted = idempotent success).
+     *
+     * @param string $path API path (e.g. '/contacts/{id}' or '/invoices/estimate/{id}')
+     * @param array<string, mixed> $query Optional query parameters
+     * @param string|null $locationId Optional location ID to pass as header
+     * @param int $timeout Request timeout in seconds
+     * @param int $maxRetries Maximum number of retry attempts for transient errors
+     * @return array|WP_Error Response data or WP_Error
+     */
+    public function delete(string $path, array $query = [], ?string $locationId = null, int $timeout = 10, int $maxRetries = 1)
+    {
+        $url = self::BASE_URL . $path;
+        if ($query) {
+            $url .= '?' . http_build_query($query);
+        }
+
+        $headers = $this->headers($locationId);
+
+        // Some GHL DELETE endpoints validate altId/altType from the request body (not querystring).
+        // If present in $query, also include them in JSON body.
+        $deleteBody = [];
+        if (isset($query['altId'])) {
+            $deleteBody['altId'] = (string)$query['altId'];
+        }
+        if (isset($query['altType'])) {
+            $deleteBody['altType'] = (string)$query['altType'];
+        }
+        
+        // Debug logging in development
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $this->logger->info('GHL API DELETE Request', [
+                'url' => $url,
+                'headers' => array_keys($headers),
+                'hasLocationIdHeader' => isset($headers['LocationId']),
+                'hasBodyAlt' => !empty($deleteBody),
+            ]);
+        }
+
+        $attempt = 0;
+        $lastError = null;
+
+        while ($attempt <= $maxRetries) {
+            $requestArgs = [
+                'method'  => 'DELETE',
+                'headers' => $headers,
+                'timeout' => $timeout,
+                'sslverify' => true,
+                'redirection' => 5,
+            ];
+
+            if (!empty($deleteBody)) {
+                $requestArgs['body'] = wp_json_encode($deleteBody);
+            }
+
+            $response = wp_remote_request($url, $requestArgs);
+
+            if (!is_wp_error($response)) {
+                return $this->processDeleteResponse($response, $url);
+            }
+
+            $errorMessage = $response->get_error_message();
+            // Note: SSL errors are NOT retried - they're usually persistent network/configuration issues
+            $isTransientError = (
+                strpos($errorMessage, 'Connection timed out') !== false ||
+                strpos($errorMessage, 'cURL error 28') !== false ||
+                ($response->get_error_code() === 'http_request_failed' && strpos($errorMessage, 'SSL') === false)
+            );
+
+            $lastError = $response;
+
+            if (!$isTransientError || $attempt >= $maxRetries) {
+                break;
+            }
+
+            usleep(pow(2, $attempt) * 1000000);
+            $attempt++;
+        }
+
+        return $this->handleSslError($lastError, $url);
+    }
+
+    /**
+     * Process DELETE response - treats 404 as success (idempotent: already deleted).
+     *
+     * @param array $response WordPress HTTP response
+     * @param string $url Request URL for logging
+     * @return array|WP_Error
+     */
+    private function processDeleteResponse($response, string $url): array|WP_Error
+    {
+        $code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+
+        // 404 = already deleted (idempotent success)
+        if ($code === 404) {
+            $this->logger->info('GHL DELETE: Resource already deleted (404)', [
+                'url' => $url,
+                'code' => $code,
+            ]);
+            return ['ok' => true, 'alreadyDeleted' => true];
+        }
+
+        // 200-299 = success
+        if ($code >= 200 && $code < 300) {
+            $decoded = json_decode($body, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                // Empty body is fine for DELETE
+                if (empty($body)) {
+                    return ['ok' => true, 'alreadyDeleted' => false];
+                }
+                $this->logger->warning('GHL DELETE: Invalid JSON response', [
+                    'url' => $url,
+                    'body' => $body,
+                ]);
+                // Still treat as success if HTTP code was 2xx
+                return ['ok' => true, 'alreadyDeleted' => false];
+            }
+            return array_merge(['ok' => true, 'alreadyDeleted' => false], is_array($decoded) ? $decoded : []);
+        }
+
+        // Other status codes = error
+        $this->logger->warning('GHL DELETE: Non-2xx/404 response', [
+            'url' => $url,
+            'code' => $code,
+            'body' => $body,
+        ]);
+        return new WP_Error('ghl_http_error', sprintf('GHL DELETE responded with status %d', $code), [
+            'code' => $code,
+            'body' => $body,
+        ]);
+    }
+
+    /**
      * @return array<string, string>
      */
     private function headers(?string $locationId = null): array
