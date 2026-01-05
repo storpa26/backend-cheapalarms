@@ -156,6 +156,20 @@ class Plugin
             $this->container->get(EstimateSnapshotSyncService::class)->syncLocation($locationId);
         }, 10, 1);
 
+        // Retention cleanup job (daily) - permanently delete estimates soft-deleted > 30 days
+        add_action('ca_cleanup_expired_deletions', function () {
+            $this->container->get(\CheapAlarms\Plugin\Services\Estimate\RetentionCleanupService::class)->cleanup();
+        }, 10, 0);
+
+        // Schedule recurring retention cleanup job (if not already scheduled)
+        if (!wp_next_scheduled('ca_cleanup_expired_deletions_daily')) {
+            wp_schedule_event(time() + (2 * HOUR_IN_SECONDS), 'daily', 'ca_cleanup_expired_deletions_daily');
+        }
+
+        add_action('ca_cleanup_expired_deletions_daily', function () {
+            wp_schedule_single_event(time() + 1, 'ca_cleanup_expired_deletions');
+        });
+
         $this->registerCors();
         $this->registerRestEndpoints();
         $this->registerFrontend();
@@ -276,6 +290,10 @@ class Plugin
         $this->container->set(EstimateSnapshotRepository::class, fn () => new EstimateSnapshotRepository());
         $this->container->set(EstimateSnapshotSyncService::class, fn () => new EstimateSnapshotSyncService(
             $this->container->get(\CheapAlarms\Plugin\Services\EstimateService::class),
+            $this->container->get(EstimateSnapshotRepository::class),
+            $this->container->get(Logger::class)
+        ));
+        $this->container->set(\CheapAlarms\Plugin\Services\Estimate\RetentionCleanupService::class, fn () => new \CheapAlarms\Plugin\Services\Estimate\RetentionCleanupService(
             $this->container->get(EstimateSnapshotRepository::class),
             $this->container->get(Logger::class)
         ));

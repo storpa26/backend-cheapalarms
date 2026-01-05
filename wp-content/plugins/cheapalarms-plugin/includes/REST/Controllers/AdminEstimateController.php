@@ -184,6 +184,54 @@ class AdminEstimateController extends AdminController
             ],
         ]);
 
+        // Restore soft-deleted estimate
+        register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)/restore', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->restoreEstimate($request);
+            },
+            'args'                => [
+                'estimateId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]);
+
+        // List trash (soft-deleted estimates)
+        register_rest_route('ca/v1', '/admin/estimates/trash', [
+            'methods'             => 'GET',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->listTrash($request);
+            },
+        ]);
+
+        // Bulk restore estimates
+        register_rest_route('ca/v1', '/admin/estimates/bulk-restore', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->bulkRestore($request);
+            },
+        ]);
+
         // Non-blocking snapshot refresh for admin lists (WP-Cron).
         register_rest_route('ca/v1', '/admin/estimates/sync-snapshots', [
             'methods'             => 'POST',
@@ -825,23 +873,45 @@ class AdminEstimateController extends AdminController
 
         // Step 2: Local delete (if needed, and GHL succeeded or scope=local)
         if ($doLocal && !($scope === 'both' && !$result['ghl']['ok'])) {
-            $localResult = $this->deleteEstimateLocal($estimateId);
-            if (is_wp_error($localResult)) {
-                $result['local'] = [
-                    'ok' => false,
-                    'error' => $localResult->get_error_message(),
-                ];
-                $result['ok'] = false;
-            } else {
-                $result['local'] = [
-                    'ok' => true,
-                    'alreadyDeleted' => $localResult['alreadyDeleted'] ?? false,
-                ];
-                $logger->info('Estimate deleted from WordPress', [
-                    'correlationId' => $correlationId,
-                    'estimateId' => $estimateId,
-                    'alreadyDeleted' => $result['local']['alreadyDeleted'],
-                ]);
+            // For local delete, locationId is required for location-scoped soft delete
+            if (empty($locationId)) {
+                // Try to get locationId from the estimate snapshot
+                global $wpdb;
+                $tableName = $wpdb->prefix . 'ca_estimate_snapshots';
+                $locationId = $wpdb->get_var($wpdb->prepare(
+                    "SELECT location_id FROM {$tableName} WHERE estimate_id = %s LIMIT 1",
+                    $estimateId
+                ));
+                
+                if (empty($locationId)) {
+                    $result['local'] = [
+                        'ok' => false,
+                        'error' => 'locationId is required for soft delete',
+                    ];
+                    $result['ok'] = false;
+                }
+            }
+            
+            if (!empty($locationId)) {
+                $localResult = $this->deleteEstimateLocal($estimateId, $scope, $locationId);
+                if (is_wp_error($localResult)) {
+                    $result['local'] = [
+                        'ok' => false,
+                        'error' => $localResult->get_error_message(),
+                    ];
+                    $result['ok'] = false;
+                } else {
+                    $result['local'] = [
+                        'ok' => true,
+                        'alreadyDeleted' => $localResult['alreadyDeleted'] ?? false,
+                    ];
+                    $logger->info('Estimate soft deleted from WordPress', [
+                        'correlationId' => $correlationId,
+                        'estimateId' => $estimateId,
+                        'locationId' => $locationId,
+                        'alreadyDeleted' => $result['local']['alreadyDeleted'],
+                    ]);
+                }
             }
         }
 
@@ -857,33 +927,236 @@ class AdminEstimateController extends AdminController
     }
 
     /**
-     * Delete estimate from WordPress (local delete).
+     * Restore soft-deleted estimate
+     * 
+     * POST /ca/v1/admin/estimates/{estimateId}/restore
+     */
+    public function restoreEstimate(WP_REST_Request $request): WP_REST_Response
+    {
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $estimateId = sanitize_text_field($request->get_param('estimateId'));
+        if (empty($estimateId)) {
+            return $this->respond(new WP_Error('bad_request', __('Estimate ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $locationIdResult = $this->resolveLocationId($request);
+        if (is_wp_error($locationIdResult)) {
+            return $this->respond($locationIdResult);
+        }
+        $locationId = $locationIdResult;
+
+        $user = wp_get_current_user();
+        $result = $this->snapshotRepo->restore($estimateId, $locationId, $user->ID ?? 0);
+
+        if (is_wp_error($result)) {
+            return $this->respond($result);
+        }
+
+        // Note: Portal meta was hard deleted during soft delete.
+        // If portal meta is needed, it must be recreated by syncing from GHL.
+        // This is intentional - snapshot table is source of truth, not portal meta.
+
+        return $this->respond([
+            'ok' => true,
+            'estimateId' => $estimateId,
+            'locationId' => $locationId,
+            'restored_at' => current_time('mysql'),
+            'note' => 'Estimate restored. Portal meta will regenerate on next sync or when estimate is accessed.',
+            'warning' => 'Portal meta and user links were deleted and will need to be recreated from GHL if needed.',
+        ]);
+    }
+
+    /**
+     * List trash (soft-deleted estimates)
+     * 
+     * GET /ca/v1/admin/estimates/trash
+     */
+    public function listTrash(WP_REST_Request $request): WP_REST_Response
+    {
+        $locationIdResult = $this->resolveLocationId($request);
+        if (is_wp_error($locationIdResult)) {
+            return $this->respond($locationIdResult);
+        }
+        $locationId = $locationIdResult;
+
+        $limit = max(1, min(100, (int)($request->get_param('limit') ?? 100)));
+        $items = $this->snapshotRepo->findInTrash($locationId, $limit);
+
+        if (is_wp_error($items)) {
+            return $this->respond($items);
+        }
+
+        // Normalize for frontend
+        $normalized = [];
+        foreach ($items as $row) {
+            $normalized[] = [
+                'id' => $row['estimate_id'] ?? null,
+                'estimateNumber' => $row['estimate_number'] ?? null,
+                'email' => $row['email'] ?? '',
+                'status' => $row['ghl_status'] ?? '',
+                'total' => (float)($row['total'] ?? 0),
+                'currency' => $row['currency'] ?? 'AUD',
+                'createdAt' => $row['created_at'] ?? '',
+                'updatedAt' => $row['updated_at'] ?? '',
+                'deletedAt' => $row['deleted_at'] ?? '',
+                'deletedBy' => $row['deleted_by'] ?? null,
+                'deletionScope' => $row['deletion_scope'] ?? null,
+                'deletionReason' => $row['deletion_reason'] ?? null,
+            ];
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'items' => $normalized,
+            'count' => count($normalized),
+        ]);
+    }
+
+    /**
+     * Bulk restore estimates
+     * 
+     * POST /ca/v1/admin/estimates/bulk-restore
+     */
+    public function bulkRestore(WP_REST_Request $request): WP_REST_Response
+    {
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $body = $request->get_json_params() ?? [];
+        $confirm = sanitize_text_field($body['confirm'] ?? '');
+        $estimateIds = $body['estimateIds'] ?? [];
+
+        if ($confirm !== 'BULK_RESTORE') {
+            return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="BULK_RESTORE"', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!is_array($estimateIds) || empty($estimateIds)) {
+            return $this->respond(new WP_Error('bad_request', __('estimateIds array is required', 'cheapalarms'), ['status' => 400]));
+        }
+
+        // Validate each ID is a valid string/numeric
+        foreach ($estimateIds as $id) {
+            if (!is_string($id) && !is_numeric($id)) {
+                return $this->respond(new WP_Error('bad_request', __('Invalid estimate ID format. All IDs must be strings or numbers.', 'cheapalarms'), ['status' => 400]));
+            }
+        }
+
+        // Limit batch size for performance
+        $maxBatchSize = 1000;
+        if (count($estimateIds) > $maxBatchSize) {
+            return $this->respond(new WP_Error('bad_request', sprintf(__('Maximum %d estimates per batch', 'cheapalarms'), $maxBatchSize), ['status' => 400]));
+        }
+
+        $user = wp_get_current_user();
+        $restored = 0;
+        $errors = [];
+
+        // Process in batches of 100 for better performance
+        $batchSize = 100;
+        $batches = array_chunk($estimateIds, $batchSize);
+
+        foreach ($batches as $batch) {
+            foreach ($batch as $estimateId) {
+                $estimateId = sanitize_text_field($estimateId);
+                if (empty($estimateId)) {
+                    continue;
+                }
+
+                // Get locationId for this estimate (from request or fetch from DB)
+                $locationId = !empty($body['locationId']) ? sanitize_text_field($body['locationId']) : null;
+                if (!$locationId) {
+                    // Fetch locationId from database
+                    global $wpdb;
+                    $locationId = $wpdb->get_var($wpdb->prepare(
+                        "SELECT location_id FROM {$wpdb->prefix}ca_estimate_snapshots WHERE estimate_id = %s LIMIT 1",
+                        $estimateId
+                    ));
+                }
+                
+                if (!$locationId) {
+                    $errors[] = ['estimateId' => $estimateId, 'error' => 'Location ID not found'];
+                    continue;
+                }
+                
+                $result = $this->snapshotRepo->restore($estimateId, $locationId, $user->ID ?? 0);
+                if (is_wp_error($result)) {
+                    $errors[] = ['estimateId' => $estimateId, 'error' => $result->get_error_message()];
+                } else {
+                    $restored++;
+                }
+            }
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'restored' => $restored,
+            'total' => count($estimateIds),
+            'errors' => $errors,
+        ]);
+    }
+
+    /**
+     * Delete estimate from WordPress (local delete - now soft delete).
+     * 
+     * IMPORTANT: For MVP, only allows scope='local' in this method.
+     * GHL deletion is handled separately in parent deleteEstimate() method.
      *
      * @param string $estimateId
+     * @param string $scope 'local', 'ghl', 'both', or 'orphan_cleanup' (for MVP, only 'local' is used here)
+     * @param string $locationId Location ID (required for location-scoped soft delete)
      * @return array|WP_Error
      */
-    private function deleteEstimateLocal(string $estimateId)
+    private function deleteEstimateLocal(string $estimateId, string $scope = 'local', string $locationId = '')
     {
         global $wpdb;
+
+        // For MVP: Only allow scope='local' in this method (GHL deletion handled separately)
+        if ($scope !== 'local' && $scope !== 'orphan_cleanup') {
+            $scope = 'local'; // Override to 'local' for clarity
+        }
+
+        if (empty($locationId)) {
+            return new WP_Error('bad_request', 'locationId is required for soft delete', ['status' => 400]);
+        }
 
         $alreadyDeleted = true;
         $deleted = [];
 
-        // 1. Delete portal meta option
+        // 1. Soft delete snapshot rows (instead of hard delete)
+        $user = wp_get_current_user();
+        $snapshotResult = $this->snapshotRepo->softDelete(
+            $estimateId,
+            $locationId,
+            $user->ID ?? 0,
+            $scope,
+            null
+        );
+        
+        if (is_wp_error($snapshotResult)) {
+            // Check if it's already deleted (409) - that's okay
+            if ($snapshotResult->get_error_code() === 'already_deleted') {
+                // Already soft-deleted, that's fine
+            } else {
+                // Log but don't fail if snapshot soft delete fails (might not exist)
+                error_log('Failed to soft delete snapshot for estimate ' . $estimateId . ': ' . $snapshotResult->get_error_message());
+            }
+        } else {
+            $alreadyDeleted = false;
+            $deleted[] = 'snapshots';
+        }
+
+        // 2. Delete portal meta option (hard delete - not source of truth)
         $optionName = 'ca_portal_meta_' . $estimateId;
         $metaDeleted = delete_option($optionName);
         if ($metaDeleted) {
             $alreadyDeleted = false;
             $deleted[] = 'portal_meta';
-        }
-
-        // 2. Delete snapshot rows
-        $snapshotResult = $this->snapshotRepo->deleteByEstimateId($estimateId);
-        if (is_wp_error($snapshotResult)) {
-            // Log but don't fail if snapshot delete fails (might not exist)
-            error_log('Failed to delete snapshot for estimate ' . $estimateId . ': ' . $snapshotResult->get_error_message());
-        } else {
-            $deleted[] = 'snapshots';
         }
 
         // 3. Clean up user meta linkage (find users with this estimateId)

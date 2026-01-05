@@ -9,7 +9,7 @@ use function update_option;
 class Schema
 {
     public const OPTION_KEY = 'ca_db_schema_version';
-    public const VERSION    = '2025-12-29-01';
+    public const VERSION    = '2025-12-30-01';
 
     public static function maybeMigrate(): void
     {
@@ -50,14 +50,78 @@ class Schema
             updated_at DATETIME NULL,
             synced_at DATETIME NOT NULL,
             raw_json LONGTEXT NULL,
+            deleted_at DATETIME NULL,
+            deleted_by BIGINT(20) UNSIGNED NULL,
+            deletion_reason VARCHAR(255) NULL,
+            deletion_scope VARCHAR(20) NULL,
+            restored_at DATETIME NULL,
+            restored_by BIGINT(20) UNSIGNED NULL,
             PRIMARY KEY (id),
             UNIQUE KEY location_estimate (location_id, estimate_id),
             KEY location_updated (location_id, updated_at),
             KEY location_synced (location_id, synced_at),
-            KEY estimate_id (estimate_id)
+            KEY estimate_id (estimate_id),
+            KEY idx_deleted_at (deleted_at),
+            KEY idx_deletion_scope (deletion_scope, deleted_at)
         ) {$charsetCollate};";
 
         dbDelta($sql);
+
+        // Add soft delete columns if they don't exist (for existing installations)
+        $columns = $wpdb->get_col("DESCRIBE {$tableName}");
+        $columnsToAdd = [];
+
+        if (!in_array('deleted_at', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN deleted_at DATETIME NULL";
+        }
+        if (!in_array('deleted_by', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN deleted_by BIGINT(20) UNSIGNED NULL";
+        }
+        if (!in_array('deletion_reason', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN deletion_reason VARCHAR(255) NULL";
+        }
+        if (!in_array('deletion_scope', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN deletion_scope VARCHAR(20) NULL";
+        }
+        if (!in_array('restored_at', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN restored_at DATETIME NULL";
+        }
+        if (!in_array('restored_by', $columns, true)) {
+            $columnsToAdd[] = "ALTER TABLE {$tableName} ADD COLUMN restored_by BIGINT(20) UNSIGNED NULL";
+        }
+
+        foreach ($columnsToAdd as $alterSql) {
+            $result = $wpdb->query($alterSql);
+            if ($result === false && !empty($wpdb->last_error)) {
+                // Log but don't fail - column might already exist or migration might have run
+                error_log('Schema migration warning (column add): ' . $wpdb->last_error);
+            }
+        }
+
+        // Add indexes if they don't exist (use prepared statements for safety)
+        $indexes = $wpdb->get_col($wpdb->prepare(
+            "SHOW INDEX FROM {$tableName} WHERE Key_name = %s",
+            'idx_deleted_at'
+        ));
+        if (empty($indexes)) {
+            $result = $wpdb->query("ALTER TABLE {$tableName} ADD INDEX idx_deleted_at (deleted_at)");
+            if ($result === false && !empty($wpdb->last_error)) {
+                // Log but don't fail - index might already exist
+                error_log('Schema migration warning (index add): ' . $wpdb->last_error);
+            }
+        }
+
+        $indexes = $wpdb->get_col($wpdb->prepare(
+            "SHOW INDEX FROM {$tableName} WHERE Key_name = %s",
+            'idx_deletion_scope'
+        ));
+        if (empty($indexes)) {
+            $result = $wpdb->query("ALTER TABLE {$tableName} ADD INDEX idx_deletion_scope (deletion_scope, deleted_at)");
+            if ($result === false && !empty($wpdb->last_error)) {
+                // Log but don't fail - index might already exist
+                error_log('Schema migration warning (index add): ' . $wpdb->last_error);
+            }
+        }
     }
 }
 
