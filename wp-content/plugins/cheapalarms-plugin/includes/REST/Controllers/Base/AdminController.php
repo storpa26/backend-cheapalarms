@@ -172,6 +172,18 @@ abstract class AdminController implements ControllerInterface
         }
         
         $restResponse = new WP_REST_Response($response, $status);
+        
+        // Add rate limit headers if this is a rate limit error
+        if ($code === 'rate_limited' && isset($errorData['rate_limit']) && is_array($errorData['rate_limit'])) {
+            $rateLimit = $errorData['rate_limit'];
+            $restResponse->header('X-RateLimit-Limit', (string) ($rateLimit['limit'] ?? 0));
+            $restResponse->header('X-RateLimit-Remaining', (string) ($rateLimit['remaining'] ?? 0));
+            $restResponse->header('X-RateLimit-Reset', (string) ($rateLimit['reset'] ?? time()));
+            if (isset($errorData['retry_after'])) {
+                $restResponse->header('Retry-After', (string) $errorData['retry_after']);
+            }
+        }
+        
         $this->addSecurityHeaders($restResponse);
         return $restResponse;
     }

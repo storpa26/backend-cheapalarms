@@ -17,6 +17,8 @@ use CheapAlarms\Plugin\REST\Controllers\AdminInvoiceController;
 use CheapAlarms\Plugin\REST\Controllers\QuoteRequestController;
 use CheapAlarms\Plugin\REST\Controllers\XeroController;
 use CheapAlarms\Plugin\REST\Controllers\StripeController;
+use CheapAlarms\Plugin\REST\Controllers\HealthController;
+use CheapAlarms\Plugin\REST\Controllers\LogController;
 use CheapAlarms\Plugin\Services\Container;
 
 class ApiKernel
@@ -28,6 +30,7 @@ class ApiKernel
     public function register(): void
     {
         $controllers = [
+            new HealthController($this->container), // Register health check first
             new AuthController($this->container),
             new PasswordResetController($this->container),
             new EstimateController($this->container),
@@ -43,6 +46,7 @@ class ApiKernel
             new QuoteRequestController($this->container),
             new XeroController($this->container),
             new StripeController($this->container),
+            new LogController($this->container),
         ];
 
         foreach ($controllers as $controller) {

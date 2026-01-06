@@ -146,9 +146,28 @@ class AdminInvoiceController extends AdminController
         }
 
         $items = $result['items'] ?? [];
-        $out   = [];
+        
+        // PHASE 1: Collect all invoice IDs
+        $invoiceIds = array_filter(array_map(fn($item) => $item['id'] ?? null, $items), fn($id) => !empty($id));
+        
+        // PHASE 2: Batch reverse lookup - find all estimate IDs for these invoices (ONE query)
+        $invoiceToEstimateMap = [];
+        if (!empty($invoiceIds)) {
+            $invoiceToEstimateMap = $this->portalMeta->batchFindEstimateIdsByInvoiceIds($invoiceIds);
+        }
+        
+        // PHASE 3: Collect all linked estimate IDs, normalize to strings, and batch fetch their portal meta
+        $linkedEstimateIds = array_filter(
+            array_map('strval', array_values($invoiceToEstimateMap)),
+            fn($id) => !empty($id)
+        );
+        $allMeta = [];
+        if (!empty($linkedEstimateIds)) {
+            $allMeta = $this->portalMeta->batchGet($linkedEstimateIds);
+        }
 
-        // For each invoice, find linked estimate from portal meta
+        // PHASE 4: Process invoices with pre-fetched data
+        $out = [];
         foreach ($items as $item) {
             $invoiceId = $item['id'] ?? null;
             if (!$invoiceId) {
@@ -157,7 +176,6 @@ class AdminInvoiceController extends AdminController
 
             // Apply search filter
             if ($search) {
-                $searchLower = strtolower($search);
                 $matches = false;
                 $matches = $matches || (isset($item['invoiceNumber']) && stripos((string)$item['invoiceNumber'], $search) !== false);
                 $matches = $matches || (isset($item['contactName']) && stripos($item['contactName'], $search) !== false);
@@ -167,13 +185,18 @@ class AdminInvoiceController extends AdminController
                 }
             }
 
-            // Find linked estimate by searching portal meta
-            $linkedEstimateId = $this->findEstimateIdByInvoiceId($invoiceId);
-            
-            // Get portal status from linked estimate meta
-            $portalStatus = 'sent';
+            // Get linked estimate ID from batch result and normalize to string
+            // Normalize invoiceId to string first (map keys are normalized strings)
+            $invoiceIdNormalized = (string)$invoiceId;
+            $linkedEstimateId = $invoiceToEstimateMap[$invoiceIdNormalized] ?? null;
             if ($linkedEstimateId) {
-                $meta = $this->getPortalMeta($linkedEstimateId);
+                $linkedEstimateId = (string)$linkedEstimateId;
+            }
+            
+            // Get portal status from pre-fetched meta
+            $portalStatus = 'sent';
+            if ($linkedEstimateId && isset($allMeta[$linkedEstimateId])) {
+                $meta = $allMeta[$linkedEstimateId];
                 if (!empty($meta)) {
                     $portalStatus = $meta['invoice']['status'] ?? $meta['quote']['status'] ?? 'sent';
                 }

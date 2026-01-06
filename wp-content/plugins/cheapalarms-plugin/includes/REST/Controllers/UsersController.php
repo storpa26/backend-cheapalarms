@@ -81,9 +81,44 @@ class UsersController implements ControllerInterface
             'order' => 'DESC',
         ]);
 
+        // PHASE 1: Collect all user IDs
+        $userIds = array_map(fn($user) => $user->ID, $users);
+        
+        // PHASE 2: Batch fetch ghl_contact_id for all users in ONE query (prevents N+1)
+        $ghlContactIdMap = [];
+        if (!empty($userIds)) {
+            global $wpdb;
+            $placeholders = implode(',', array_fill(0, count($userIds), '%d'));
+            $query = $wpdb->prepare(
+                "SELECT user_id, meta_value FROM {$wpdb->usermeta} 
+                 WHERE user_id IN ($placeholders) AND meta_key = 'ghl_contact_id'",
+                ...$userIds
+            );
+            $results = $wpdb->get_results($query, ARRAY_A);
+            
+            // Check for database errors
+            if ($wpdb->last_error) {
+                if (function_exists('error_log')) {
+                    error_log(sprintf(
+                        '[CheapAlarms] Database error in listUsers: %s',
+                        $wpdb->last_error
+                    ));
+                }
+                // Continue with empty map - users will have null ghl_contact_id
+            } elseif (is_array($results)) {
+                foreach ($results as $row) {
+                    if (!empty($row['user_id']) && !empty($row['meta_value'])) {
+                        $ghlContactIdMap[(int)$row['user_id']] = $row['meta_value'];
+                    }
+                }
+            }
+        }
+
+        // PHASE 3: Process users with pre-fetched data
         $formatted = [];
         foreach ($users as $user) {
-            $ghlContactId = get_user_meta($user->ID, 'ghl_contact_id', true);
+            // Use pre-fetched ghl_contact_id instead of get_user_meta()
+            $ghlContactId = $ghlContactIdMap[$user->ID] ?? null;
             $hasPortal = user_can($user, 'ca_access_portal');
 
             $formatted[] = [

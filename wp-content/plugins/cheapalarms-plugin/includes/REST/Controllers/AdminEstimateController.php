@@ -346,6 +346,9 @@ class AdminEstimateController extends AdminController
                 continue;
             }
 
+            // Normalize to string to match batchGet() keys (which are normalized)
+            $estimateId = (string)$estimateId;
+
             // Get portal meta from batch result (already fetched)
             $meta = $allMeta[$estimateId] ?? [];
             $portalStatusValue = $meta['quote']['status'] ?? 'sent';
@@ -1057,7 +1060,42 @@ class AdminEstimateController extends AdminController
         $restored = 0;
         $errors = [];
 
-        // Process in batches of 100 for better performance
+        // PHASE 1: Batch fetch all locationIds in ONE query (prevents N+1)
+        $requestLocationId = !empty($body['locationId']) ? sanitize_text_field($body['locationId']) : null;
+        $locationIdMap = [];
+        
+        if (!$requestLocationId) {
+            // Only batch fetch if locationId not provided in request
+            $sanitizedEstimateIds = array_map('sanitize_text_field', array_filter($estimateIds, fn($id) => !empty($id)));
+            if (!empty($sanitizedEstimateIds)) {
+                global $wpdb;
+                $placeholders = implode(',', array_fill(0, count($sanitizedEstimateIds), '%s'));
+                $query = $wpdb->prepare(
+                    "SELECT estimate_id, location_id FROM {$wpdb->prefix}ca_estimate_snapshots WHERE estimate_id IN ($placeholders)",
+                    ...$sanitizedEstimateIds
+                );
+                $results = $wpdb->get_results($query, ARRAY_A);
+                
+                // Check for database errors
+                if ($wpdb->last_error) {
+                    if (function_exists('error_log')) {
+                        error_log(sprintf(
+                            '[CheapAlarms] Database error in bulkRestore: %s',
+                            $wpdb->last_error
+                        ));
+                    }
+                    // Continue with empty map - will result in errors for affected estimates
+                } elseif (is_array($results)) {
+                    foreach ($results as $row) {
+                        if (!empty($row['estimate_id']) && !empty($row['location_id'])) {
+                            $locationIdMap[$row['estimate_id']] = $row['location_id'];
+                        }
+                    }
+                }
+            }
+        }
+
+        // PHASE 2: Process in batches of 100 for better performance
         $batchSize = 100;
         $batches = array_chunk($estimateIds, $batchSize);
 
@@ -1068,16 +1106,8 @@ class AdminEstimateController extends AdminController
                     continue;
                 }
 
-                // Get locationId for this estimate (from request or fetch from DB)
-                $locationId = !empty($body['locationId']) ? sanitize_text_field($body['locationId']) : null;
-                if (!$locationId) {
-                    // Fetch locationId from database
-                    global $wpdb;
-                    $locationId = $wpdb->get_var($wpdb->prepare(
-                        "SELECT location_id FROM {$wpdb->prefix}ca_estimate_snapshots WHERE estimate_id = %s LIMIT 1",
-                        $estimateId
-                    ));
-                }
+                // Get locationId from request, batch map, or skip if not found
+                $locationId = $requestLocationId ?? ($locationIdMap[$estimateId] ?? null);
                 
                 if (!$locationId) {
                     $errors[] = ['estimateId' => $estimateId, 'error' => 'Location ID not found'];
@@ -1160,22 +1190,74 @@ class AdminEstimateController extends AdminController
         }
 
         // 3. Clean up user meta linkage (find users with this estimateId)
-        $users = $wpdb->get_col($wpdb->prepare(
+        $userIds = $wpdb->get_col($wpdb->prepare(
             "SELECT user_id FROM {$wpdb->usermeta} 
              WHERE meta_key = 'ca_estimate_ids' 
              AND meta_value LIKE %s",
             '%' . $wpdb->esc_like($estimateId) . '%'
         ));
 
-        foreach ($users as $userId) {
-            $estimateIds = get_user_meta($userId, 'ca_estimate_ids', true);
+        // PHASE 1: Batch fetch all user meta in ONE query (prevents N+1)
+        $userMetaMap = [];
+        if (!empty($userIds)) {
+            $placeholders = implode(',', array_fill(0, count($userIds), '%d'));
+            $query = $wpdb->prepare(
+                "SELECT user_id, meta_key, meta_value FROM {$wpdb->usermeta} 
+                 WHERE user_id IN ($placeholders) 
+                 AND meta_key IN ('ca_estimate_ids', 'ca_estimate_locations')",
+                ...$userIds
+            );
+            $results = $wpdb->get_results($query, ARRAY_A);
+            
+            // Check for database errors
+            if ($wpdb->last_error) {
+                if (function_exists('error_log')) {
+                    error_log(sprintf(
+                        '[CheapAlarms] Database error in deleteEstimateLocal: %s',
+                        $wpdb->last_error
+                    ));
+                }
+                // Continue with empty map - user meta cleanup will be skipped
+            } elseif (is_array($results)) {
+                foreach ($results as $row) {
+                    $userId = (int)$row['user_id'];
+                    $metaKey = $row['meta_key'];
+                    $metaValue = $row['meta_value'];
+                    
+                    if (!isset($userMetaMap[$userId])) {
+                        $userMetaMap[$userId] = [];
+                    }
+                    
+                    if ($metaKey === 'ca_estimate_ids') {
+                        $decoded = maybe_unserialize($metaValue);
+                        $userMetaMap[$userId]['estimate_ids'] = is_array($decoded) ? $decoded : [];
+                    } elseif ($metaKey === 'ca_estimate_locations') {
+                        $decoded = maybe_unserialize($metaValue);
+                        $userMetaMap[$userId]['locations'] = is_array($decoded) ? $decoded : [];
+                    }
+                }
+            }
+        }
+
+        // PHASE 2: Process users with pre-fetched meta
+        foreach ($userIds as $userId) {
+            $userId = (int)$userId;
+            
+            // Skip invalid user IDs
+            if ($userId <= 0) {
+                continue;
+            }
+            
+            $estimateIds = $userMetaMap[$userId]['estimate_ids'] ?? [];
+            $locations = $userMetaMap[$userId]['locations'] ?? [];
+            
+            // Clean up ca_estimate_ids
             if (is_array($estimateIds)) {
                 $estimateIds = array_filter($estimateIds, fn($id) => $id !== $estimateId);
                 update_user_meta($userId, 'ca_estimate_ids', array_values($estimateIds));
             }
 
             // Also clean up ca_estimate_locations
-            $locations = get_user_meta($userId, 'ca_estimate_locations', true);
             if (is_array($locations) && isset($locations[$estimateId])) {
                 unset($locations[$estimateId]);
                 update_user_meta($userId, 'ca_estimate_locations', $locations);

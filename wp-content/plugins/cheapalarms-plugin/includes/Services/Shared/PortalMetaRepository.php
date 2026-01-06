@@ -69,54 +69,93 @@ class PortalMetaRepository
             return [];
         }
 
+        // Normalize all IDs to strings for consistency
+        $normalizedIds = array_map('strval', $estimateIds);
+        
+        // Deduplicate IDs to avoid processing duplicates
+        $uniqueIds = array_unique($normalizedIds, SORT_REGULAR);
+        
+        // Chunk large arrays to avoid SQL IN clause limits (MySQL typically limits to 1000 items)
+        $chunkSize = 1000;
+        $allMeta = [];
+        
         global $wpdb;
         $prefix = 'ca_portal_meta_';
         
-        // Build option names
-        $optionNames = array_map(fn($id) => $prefix . $id, $estimateIds);
-        
-        // Create placeholders for prepared statement
-        $placeholders = implode(',', array_fill(0, count($optionNames), '%s'));
-        
-        // Fetch all in one query
-        $query = $wpdb->prepare(
-            "SELECT option_name, option_value 
-             FROM {$wpdb->options} 
-             WHERE option_name IN ($placeholders)",
-            $optionNames
-        );
-        
-        $results = $wpdb->get_results($query, ARRAY_A);
-        
-        // Build result map
-        $meta = [];
-        foreach ($results as $row) {
-            $estimateId = str_replace($prefix, '', $row['option_name']);
-            $decoded = json_decode($row['option_value'], true);
+        foreach (array_chunk($uniqueIds, $chunkSize) as $chunk) {
+            // Build option names
+            $optionNames = array_map(fn($id) => $prefix . $id, $chunk);
             
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                // Log error but continue
+            // Create placeholders for prepared statement
+            $placeholders = implode(',', array_fill(0, count($optionNames), '%s'));
+            
+            // Fetch all in one query
+            $query = $wpdb->prepare(
+                "SELECT option_name, option_value 
+                 FROM {$wpdb->options} 
+                 WHERE option_name IN ($placeholders)",
+                $optionNames
+            );
+            
+            $results = $wpdb->get_results($query, ARRAY_A);
+            
+            // Check for database errors
+            if ($wpdb->last_error) {
                 if (function_exists('error_log')) {
                     error_log(sprintf(
-                        '[CheapAlarms] Failed to decode portal meta for estimate %s in batchGet: %s',
-                        $estimateId,
-                        json_last_error_msg()
+                        '[CheapAlarms] Database error in batchGet: %s (Query: %s)',
+                        $wpdb->last_error,
+                        $wpdb->last_query
                     ));
                 }
-                $meta[$estimateId] = [];
-            } else {
-                $meta[$estimateId] = is_array($decoded) ? $decoded : [];
+                // Continue with empty results for this chunk
+                continue;
+            }
+            
+            // Ensure results is an array (get_results can return null on error)
+            if (!is_array($results)) {
+                $results = [];
+            }
+            
+            // Build result map for this chunk
+            foreach ($results as $row) {
+                $estimateId = str_replace($prefix, '', $row['option_name']);
+                // Safety check: verify prefix was actually removed
+                if ($estimateId === $row['option_name']) {
+                    // Prefix not found, skip this row
+                    continue;
+                }
+                
+                // Normalize to string to ensure consistent key type (already a string from str_replace, but explicit for clarity)
+                $estimateId = (string)$estimateId;
+                
+                $decoded = json_decode($row['option_value'], true);
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    // Log error but continue
+                    if (function_exists('error_log')) {
+                        error_log(sprintf(
+                            '[CheapAlarms] Failed to decode portal meta for estimate %s in batchGet: %s',
+                            $estimateId,
+                            json_last_error_msg()
+                        ));
+                    }
+                    $allMeta[$estimateId] = [];
+                } else {
+                    $allMeta[$estimateId] = is_array($decoded) ? $decoded : [];
+                }
             }
         }
         
-        // Fill in missing estimates with empty arrays
+        // Fill in missing estimates with empty arrays (normalize IDs to match keys)
         foreach ($estimateIds as $id) {
-            if (!isset($meta[$id])) {
-                $meta[$id] = [];
+            $normalizedId = (string)$id;
+            if (!isset($allMeta[$normalizedId])) {
+                $allMeta[$normalizedId] = [];
             }
         }
         
-        return $meta;
+        return $allMeta;
     }
 
     /**
@@ -173,6 +212,87 @@ class PortalMetaRepository
         }
 
         return null;
+    }
+
+    /**
+     * Batch find estimate IDs by invoice IDs (reverse lookup).
+     * This prevents N+1 queries by fetching all mappings in one query.
+     *
+     * @param string[] $invoiceIds
+     * @return array<string, string> Map of invoiceId => estimateId
+     */
+    public function batchFindEstimateIdsByInvoiceIds(array $invoiceIds): array
+    {
+        if (empty($invoiceIds)) {
+            return [];
+        }
+
+        global $wpdb;
+
+        // Normalize invoice IDs to strings for consistent lookup
+        $normalizedInvoiceIds = array_map('strval', $invoiceIds);
+
+        // Search all ca_portal_meta_* options
+        $optionNamePattern = 'ca_portal_meta_%';
+        $results = $wpdb->get_results($wpdb->prepare(
+            "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
+            $optionNamePattern
+        ));
+
+        // Check for database errors
+        if ($wpdb->last_error) {
+            if (function_exists('error_log')) {
+                error_log(sprintf(
+                    '[CheapAlarms] Database error in batchFindEstimateIdsByInvoiceIds: %s',
+                    $wpdb->last_error
+                ));
+            }
+            return []; // Return empty map on error
+        }
+
+        // Ensure results is an array (get_results can return null on error)
+        if (!is_array($results)) {
+            $results = [];
+        }
+
+        // Build map of invoiceId => estimateId
+        $mapping = [];
+        $invoiceIdsSet = array_flip($normalizedInvoiceIds); // Use normalized IDs for fast lookup
+
+        foreach ($results as $row) {
+            $meta = json_decode($row->option_value, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                // Log JSON decode errors but continue searching
+                if (function_exists('error_log')) {
+                    error_log(sprintf(
+                        '[CheapAlarms] Failed to decode portal meta in batchFindEstimateIdsByInvoiceIds: %s',
+                        json_last_error_msg()
+                    ));
+                }
+                continue;
+            }
+            if (!is_array($meta)) {
+                continue;
+            }
+
+            $metaInvoiceId = $meta['invoice']['id'] ?? null;
+            // Normalize to string for consistent lookup
+            if ($metaInvoiceId) {
+                $metaInvoiceId = (string)$metaInvoiceId;
+            }
+            if ($metaInvoiceId && isset($invoiceIdsSet[$metaInvoiceId])) {
+                // Extract estimateId from option_name (ca_portal_meta_{estimateId})
+                $estimateId = str_replace('ca_portal_meta_', '', $row->option_name);
+                // Safety check: verify prefix was actually removed
+                if ($estimateId && $estimateId !== $row->option_name) {
+                    // Normalize to string for consistency (already a string from str_replace, but explicit for clarity)
+                    $estimateId = (string)$estimateId;
+                    $mapping[$metaInvoiceId] = $estimateId;
+                }
+            }
+        }
+
+        return $mapping;
     }
 
     /**

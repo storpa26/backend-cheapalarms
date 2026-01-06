@@ -133,12 +133,13 @@ class Authenticator
      */
     public function enforceRateLimit(string $key, int $limit = 5, int $windowSeconds = 300): bool|WP_Error
     {
-        $origin = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        // Get real IP address with proxy support (Cloudflare, etc.)
+        $ip = $this->getRealIpAddress();
         
         // SECURITY: Use user ID if authenticated, otherwise IP address
         // This prevents IP rotation attacks and reduces false positives from shared IPs
         $userId = get_current_user_id();
-        $identifier = $userId > 0 ? "user_{$userId}" : "ip_{$origin}";
+        $identifier = $userId > 0 ? "user_{$userId}" : "ip_{$ip}";
         
         $bucket = 'ca_rate_' . md5($key . $identifier);
         $record = get_transient($bucket);
@@ -148,20 +149,132 @@ class Authenticator
             $record = [
                 'count' => 0,
                 'reset' => $now + $windowSeconds,
+                'ip_source' => $this->getIpSource(), // For debugging
             ];
         }
 
         if ($record['count'] >= $limit) {
-            return new WP_Error('rate_limited', __('Too many attempts. Please slow down.', 'cheapalarms'), [
+            // Log rate limit violation for debugging
+            if (function_exists('error_log')) {
+                error_log(sprintf(
+                    '[CheapAlarms] Rate limit exceeded: key=%s, identifier=%s, ip=%s, ip_source=%s',
+                    $key,
+                    $identifier,
+                    $ip,
+                    $record['ip_source'] ?? 'unknown'
+                ));
+            }
+
+            $error = new WP_Error('rate_limited', __('Too many attempts. Please slow down.', 'cheapalarms'), [
                 'status'     => 429,
                 'retry_after'=> $record['reset'] - $now,
+                'rate_limit' => [
+                    'limit' => $limit,
+                    'remaining' => 0,
+                    'reset' => $record['reset'],
+                ],
             ]);
+            
+            return $error;
         }
 
+        $remaining = max(0, $limit - $record['count'] - 1);
+        
+        // Store rate limit info for header injection (via filter)
+        $record['rate_limit_info'] = [
+            'limit' => $limit,
+            'remaining' => $remaining,
+            'reset' => $record['reset'],
+        ];
+        
         $record['count']++;
         set_transient($bucket, $record, $windowSeconds);
 
+        // Store rate limit info in error data for header injection
         return true;
+    }
+
+    /**
+     * Get real IP address with proxy/Cloudflare support
+     * 
+     * @return string
+     */
+    private function getRealIpAddress(): string
+    {
+        // Check Cloudflare headers first (most reliable)
+        $cfIp = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['CF-Connecting-IP'] ?? null;
+        if ($cfIp && $this->isValidIp($cfIp)) {
+            return $cfIp;
+        }
+
+        // Check standard proxy headers
+        $forwardedFor = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['X-Forwarded-For'] ?? null;
+        if ($forwardedFor) {
+            // X-Forwarded-For can contain multiple IPs (comma-separated)
+            // Use the first one (original client IP)
+            $ips = array_map('trim', explode(',', $forwardedFor));
+            foreach ($ips as $ip) {
+                if ($this->isValidIp($ip)) {
+                    return $ip;
+                }
+            }
+        }
+
+        // Check X-Real-IP header
+        $realIp = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['X-Real-IP'] ?? null;
+        if ($realIp && $this->isValidIp($realIp)) {
+            return $realIp;
+        }
+
+        // Fallback to REMOTE_ADDR
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        return $this->isValidIp($remoteAddr) ? $remoteAddr : 'unknown';
+    }
+
+    /**
+     * Validate IP address format
+     * 
+     * @param string $ip
+     * @return bool
+     */
+    private function isValidIp(string $ip): bool
+    {
+        // Filter out invalid IPs
+        $ip = trim($ip);
+        if (empty($ip) || $ip === 'unknown') {
+            return false;
+        }
+
+        // In development, allow private ranges (localhost, 127.0.0.1, etc.)
+        $isDevelopment = defined('WP_DEBUG') && WP_DEBUG;
+        $flags = FILTER_FLAG_IPV4 | FILTER_FLAG_IPV6;
+        
+        if (!$isDevelopment) {
+            // In production, reject private and reserved ranges
+            $flags |= FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        }
+
+        // Validate IP format (IPv4 or IPv6)
+        return filter_var($ip, FILTER_VALIDATE_IP, $flags) !== false;
+    }
+
+    /**
+     * Get IP source for debugging
+     * 
+     * @return string
+     */
+    private function getIpSource(): string
+    {
+        if (isset($_SERVER['HTTP_CF_CONNECTING_IP']) || isset($_SERVER['CF-Connecting-IP'])) {
+            return 'cloudflare';
+        }
+        if (isset($_SERVER['HTTP_X_FORWARDED_FOR']) || isset($_SERVER['X-Forwarded-For'])) {
+            return 'x-forwarded-for';
+        }
+        if (isset($_SERVER['HTTP_X_REAL_IP']) || isset($_SERVER['X-Real-IP'])) {
+            return 'x-real-ip';
+        }
+        return 'remote-addr';
     }
 
     public function determineCurrentUser($userId)

@@ -11,7 +11,10 @@ use CheapAlarms\Plugin\REST\ApiKernel;
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\Logger;
+use CheapAlarms\Plugin\Services\SentryService;
 use CheapAlarms\Plugin\Services\ProductRepository;
+use CheapAlarms\Plugin\Middleware\RequestIdMiddleware;
+use CheapAlarms\Plugin\Middleware\RateLimitHeaderMiddleware;
 use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotRepository;
 use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotSyncService;
 
@@ -145,6 +148,12 @@ class Plugin
             }
         }
         
+        // Initialize Sentry early (before other services)
+        $this->initializeSentry();
+
+        // Initialize request ID tracking early (before services that need it)
+        $this->initializeRequestId();
+
         // Run schema upgrades only when needed (versioned).
         Schema::maybeMigrate();
         $this->registerRoles();
@@ -210,10 +219,137 @@ class Plugin
         }, 10, 3);
     }
 
+    /**
+     * Initialize Sentry error tracking early
+     */
+    private function initializeSentry(): void
+    {
+        try {
+            $config = new Config();
+            $sentry = new SentryService($config);
+            $sentry->init();
+
+            // Register Sentry in container
+            $this->container->set(SentryService::class, fn () => $sentry);
+
+            // Set up PHP error handler to catch fatal errors
+            $this->registerPhpErrorHandler($sentry);
+        } catch (\Throwable $e) {
+            // Don't fail if Sentry initialization fails
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Sentry initialization failed: ' . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Initialize request ID middleware
+     */
+    private function initializeRequestId(): void
+    {
+        try {
+            // Get logger (create temporary instance if needed)
+            $logger = $this->container->has(Logger::class) 
+                ? $this->container->get(Logger::class)
+                : new Logger();
+
+            $middleware = new RequestIdMiddleware($logger);
+            $middleware->init($this->container);
+
+            // Register middleware to add request ID header to REST responses
+            add_filter('rest_pre_serve_request', [$middleware, 'addRequestIdHeader'], 10, 4);
+            
+            // Register rate limit header middleware
+            $rateLimitMiddleware = new RateLimitHeaderMiddleware();
+            add_filter('rest_pre_serve_request', [$rateLimitMiddleware, 'addRateLimitHeaders'], 10, 4);
+        } catch (\Throwable $e) {
+            // Don't fail if request ID initialization fails
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Request ID initialization failed: ' . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Register PHP error handler to catch fatal errors
+     * 
+     * Note: This chains with WordPress's error handler by returning false,
+     * allowing WordPress to handle errors normally while also sending to Sentry
+     */
+    private function registerPhpErrorHandler(SentryService $sentry): void
+    {
+        // Store previous handler in a variable that can be used in closure
+        $previousHandlerRef = [null];
+        
+        // Set our error handler (set_error_handler returns the previous handler)
+        $previousHandlerRef[0] = set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline) use ($sentry, &$previousHandlerRef): bool {
+            // Only handle errors that are not suppressed with @
+            if (!(error_reporting() & $errno)) {
+                // Call previous handler if it exists
+                if ($previousHandlerRef[0] !== null) {
+                    return call_user_func($previousHandlerRef[0], $errno, $errstr, $errfile, $errline);
+                }
+                return false;
+            }
+
+            // Convert error to exception for Sentry (only for errors, not warnings/notices)
+            if (in_array($errno, [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR], true)) {
+                try {
+                    $exception = new \ErrorException($errstr, 0, $errno, $errfile, $errline);
+                    $sentry->captureException($exception, [
+                        'error_type' => 'php_error',
+                        'error_level' => $errno,
+                    ]);
+                } catch (\Throwable $e) {
+                    // Don't break if Sentry fails
+                }
+            }
+
+            // Call previous handler if it exists, otherwise return false to let PHP handle it
+            if ($previousHandlerRef[0] !== null) {
+                return call_user_func($previousHandlerRef[0], $errno, $errstr, $errfile, $errline);
+            }
+            return false;
+        }, E_ALL & ~E_DEPRECATED & ~E_STRICT);
+
+        // Register shutdown handler for fatal errors (runs after WordPress's handler)
+        register_shutdown_function(function () use ($sentry): void {
+            $error = error_get_last();
+            if ($error !== null && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_PARSE], true)) {
+                try {
+                    $exception = new \ErrorException(
+                        $error['message'],
+                        0,
+                        $error['type'],
+                        $error['file'],
+                        $error['line']
+                    );
+                    $sentry->captureException($exception, [
+                        'error_type' => 'fatal_error',
+                    ]);
+                } catch (\Throwable $e) {
+                    // Don't break if Sentry fails
+                }
+            }
+        });
+    }
+
     private function registerServices(): void
     {
         $this->container->set(Config::class, fn () => new Config());
-        $this->container->set(Logger::class, fn () => new Logger());
+        
+        // Register SentryService if not already registered
+        if (!$this->container->has(SentryService::class)) {
+            $this->container->set(SentryService::class, fn () => new SentryService($this->container->get(Config::class)));
+        }
+        
+        // Logger gets SentryService if available
+        $this->container->set(Logger::class, function () {
+            $sentry = $this->container->has(SentryService::class) 
+                ? $this->container->get(SentryService::class) 
+                : null;
+            return new Logger($sentry);
+        });
         $this->container->set(Authenticator::class, fn () => new Authenticator($this->container->get(Config::class)));
         $this->container->set(ProductRepository::class, fn () => new ProductRepository());
         $this->container->set(\CheapAlarms\Plugin\Services\GhlClient::class, fn () => new \CheapAlarms\Plugin\Services\GhlClient(
@@ -316,6 +452,14 @@ class Plugin
             if (function_exists('error_log')) {
                 error_log('[CheapAlarms Plugin] rest_api_init register controllers');
             }
+            
+            // Ensure request ID is initialized before API calls
+            if ($this->container->has(Logger::class)) {
+                $logger = $this->container->get(Logger::class);
+                $middleware = new RequestIdMiddleware($logger);
+                $middleware->init($this->container);
+            }
+            
             $kernel = new ApiKernel($this->container);
             $kernel->register();
         });
@@ -394,9 +538,40 @@ class Plugin
 
     public function activate(): void
     {
-        Schema::maybeMigrate();
-        $this->registerRoles();
-        PortalPage::activate();
+        try {
+            Schema::maybeMigrate();
+            $this->registerRoles();
+            PortalPage::activate();
+            flush_rewrite_rules();
+        } catch (\Throwable $e) {
+            // Log error for debugging, then re-throw to show error to user
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Activation error: ' . $e->getMessage());
+                error_log('[CheapAlarms] Stack trace: ' . $e->getTraceAsString());
+            }
+            // Re-throw to show error to user
+            throw $e;
+        }
+    }
+
+    public function deactivate(): void
+    {
+        // Unschedule all WP-Cron jobs
+        $timestamp = wp_next_scheduled('ca_cleanup_expired_deletions_daily');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'ca_cleanup_expired_deletions_daily');
+        }
+        
+        $timestamp = wp_next_scheduled('ca_cleanup_expired_deletions');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'ca_cleanup_expired_deletions');
+        }
+        
+        // Clear any scheduled single events (more thorough cleanup)
+        wp_clear_scheduled_hook('ca_cleanup_expired_deletions_daily');
+        wp_clear_scheduled_hook('ca_cleanup_expired_deletions');
+        wp_clear_scheduled_hook('ca_sync_estimate_snapshots');
+        
         flush_rewrite_rules();
     }
 

@@ -3,6 +3,7 @@
 namespace CheapAlarms\Plugin\Services;
 
 use CheapAlarms\Plugin\Config\Config;
+use CheapAlarms\Plugin\Services\Shared\PortalMetaRepository;
 use WP_Error;
 
 use function add_query_arg;
@@ -95,15 +96,17 @@ class EstimateService
         $locationId = $locationId ?: $this->config->getLocationId();
         $limit      = max(1, min(100, $limit));
 
-        $out     = [];
-        $rawAll  = [];
-        $offset  = '0';
+        $out        = [];
+        $rawAll     = [];
+        $allRecords = []; // Store all records for batch processing
+        $offset     = '0';
 
-        while (count($out) < $limit) {
+        // PHASE 1: Collect all records and estimate IDs
+        while (count($allRecords) < $limit) {
             $query = [
                 'altId'   => $locationId,
                 'altType' => 'location',
-                'limit'   => min(50, $limit - count($out)),
+                'limit'   => min(50, $limit - count($allRecords)),
                 'offset'  => $offset,
             ];
 
@@ -117,34 +120,10 @@ class EstimateService
                 if ($includeRaw) {
                     $rawAll[] = $record;
                 }
+                $allRecords[] = $record;
 
-                $estimateId = $record['estimateId'] ?? $record['id'] ?? $record['_id'] ?? null;
-                $email =
-                    $record['contact']['email'] ??
-                    $record['contactDetails']['email'] ??
-                    ($record['sentTo']['email'][0] ?? '') ??
-                    '';
-
-                $status = $record['estimateStatus'] ?? $record['status'] ?? '';
-
-                $portalMetaRaw = $estimateId ? get_option('ca_portal_meta_' . $estimateId, '{}') : '{}';
-                $portalMeta    = json_decode(is_string($portalMetaRaw) ? $portalMetaRaw : '{}', true);
-                $inviteToken   = $portalMeta['account']['inviteToken'] ?? null;
-
-                $out[] = [
-                    'id'             => $estimateId,
-                    'estimateNumber' => $record['estimateNumber'] ?? null,
-                    'email'          => $email,
-                    'status'         => $status,
-                    'total'          => (float)($record['total'] ?? 0),
-                    'currency'       => $record['currency'] ?? 'AUD',
-                    'createdAt'      => $record['createdAt'] ?? '',
-                    'updatedAt'      => $record['updatedAt'] ?? '',
-                    'inviteToken'    => $inviteToken,
-                ];
-
-                if (count($out) >= $limit) {
-                    break 2;
+                if (count($allRecords) >= $limit) {
+                    break 2; // Break both loops
                 }
             }
 
@@ -153,6 +132,58 @@ class EstimateService
                 break;
             }
             $offset = (string)$next;
+        }
+
+        // PHASE 2: Collect all estimate IDs and normalize to strings
+        $allEstimateIds = array_filter(array_map(
+            fn($r) => $r['estimateId'] ?? $r['id'] ?? $r['_id'] ?? null,
+            $allRecords
+        ), fn($id) => !empty($id));
+        // Normalize to strings and deduplicate
+        $allEstimateIds = array_unique(array_map('strval', $allEstimateIds), SORT_REGULAR);
+
+        // PHASE 3: Batch fetch all portal meta in ONE query
+        $allMeta = [];
+        if (!empty($allEstimateIds)) {
+            $portalMetaRepo = $this->container->get(PortalMetaRepository::class);
+            $allMeta = $portalMetaRepo->batchGet($allEstimateIds);
+        }
+
+        // PHASE 4: Process records with pre-fetched meta
+        foreach ($allRecords as $record) {
+            $estimateId = $record['estimateId'] ?? $record['id'] ?? $record['_id'] ?? null;
+            
+            // Skip records without estimateId
+            if (!$estimateId) {
+                continue;
+            }
+            
+            // Normalize to string to match batchGet() keys (which are normalized)
+            $estimateId = (string)$estimateId;
+            
+            $email =
+                $record['contact']['email'] ??
+                $record['contactDetails']['email'] ??
+                ($record['sentTo']['email'][0] ?? '') ??
+                '';
+
+            $status = $record['estimateStatus'] ?? $record['status'] ?? '';
+
+            // Use pre-fetched meta instead of get_option()
+            $portalMeta = $allMeta[$estimateId] ?? [];
+            $inviteToken = $portalMeta['account']['inviteToken'] ?? null;
+
+            $out[] = [
+                'id'             => $estimateId,
+                'estimateNumber' => $record['estimateNumber'] ?? null,
+                'email'          => $email,
+                'status'         => $status,
+                'total'          => (float)($record['total'] ?? 0),
+                'currency'       => $record['currency'] ?? 'AUD',
+                'createdAt'      => $record['createdAt'] ?? '',
+                'updatedAt'      => $record['updatedAt'] ?? '',
+                'inviteToken'    => $inviteToken,
+            ];
         }
 
         $payload = [

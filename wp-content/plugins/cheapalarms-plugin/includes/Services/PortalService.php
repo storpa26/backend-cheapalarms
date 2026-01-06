@@ -2037,16 +2037,31 @@ class PortalService
             $locations = [];
         }
 
+        // PHASE 1: Collect all unique estimate IDs and normalize to strings
+        $uniqueEstimateIds = array_filter(
+            array_unique(array_map('strval', $estimateIds), SORT_REGULAR),
+            fn($id) => !empty($id)
+        );
+        
+        // PHASE 2: Batch fetch all portal meta in ONE query (prevents N+1)
+        $allMeta = [];
+        if (!empty($uniqueEstimateIds)) {
+            $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+            $allMeta = $portalMetaRepo->batchGet($uniqueEstimateIds);
+        }
+
+        // PHASE 3: Process estimates with pre-fetched meta
         $items = [];
-        foreach (array_unique($estimateIds) as $estimateId) {
+        foreach ($uniqueEstimateIds as $estimateId) {
             if (!$estimateId) {
                 continue;
             }
 
+            // $estimateId is already normalized to string from PHASE 1
             $locationId = $locations[$estimateId] ?? '';
             
-            // Fast path: Read from portal meta only (no GHL API calls)
-            $meta = $this->getMeta($estimateId);
+            // Use pre-fetched meta instead of getMeta()
+            $meta = $allMeta[$estimateId] ?? [];
             if (empty($meta)) {
                 // Skip estimates with no portal meta
                 continue;
