@@ -150,6 +150,15 @@ abstract class AdminController implements ControllerInterface
                 'ghl_api_error' => 'Service temporarily unavailable. Please try again.',
                 'forbidden' => 'Insufficient privileges.',
                 'invalid_nonce' => 'Invalid security token.',
+                // Email sending errors - user-friendly messages safe for production
+                'email_missing' => 'Cannot send estimate: Contact email address is missing.',
+                'email_contact_missing' => 'Cannot send email: Contact ID is missing.',
+                'contact_missing' => 'Cannot send estimate: Contact is missing required information. Please ensure the contact has a valid email address.',
+                'email_invalid' => 'Invalid email address. The email address appears to be invalid or undeliverable.',
+                'email_contact_not_found' => 'Contact not found. This may indicate an invalid email address.',
+                'email_bad_request' => 'Email sending failed. Please check the contact information and try again.',
+                'email_exception' => 'An unexpected error occurred while sending email.',
+                'email_failed' => 'Failed to send estimate email. Please check contact email and try again.',
             ];
             
             $message = $genericMessages[$code] ?? 'An error occurred. Please try again.';

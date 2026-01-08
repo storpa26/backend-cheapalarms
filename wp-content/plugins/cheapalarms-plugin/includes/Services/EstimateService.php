@@ -452,12 +452,18 @@ class EstimateService
         }
 
         // Build invoice payload from estimate data
+        // Ensure businessDetails has a name (required by GHL API)
+        $businessDetails = $record['businessDetails'] ?? [];
+        if (empty($businessDetails['name'])) {
+            $businessDetails = ['name' => 'Cheap Alarms'];
+        }
+        
         $invoicePayload = [
             'altId'          => $locationId,
             'altType'        => 'location',
             'name'           => mb_substr((string)($record['name'] ?? 'Invoice'), 0, 40),
             'title'          => 'INVOICE',
-            'businessDetails' => (array)($record['businessDetails'] ?? ['name' => 'Cheap Alarms']),
+            'businessDetails' => (array)$businessDetails,
             'currency'       => (string)($record['currency'] ?? ($record['currencyOptions']['code'] ?? 'AUD')),
             'contactDetails' => $contactDetails,
             'issueDate'      => gmdate('Y-m-d'),
@@ -510,11 +516,6 @@ class EstimateService
         $portalMeta = $this->getPortalMeta($estimateId);
         $quoteStatus = $portalMeta['quote']['status'] ?? 'sent';
         
-        // Optional: Prevent sending rejected estimates (can be overridden with force flag)
-        if ($quoteStatus === 'rejected' && empty($options['force'])) {
-            return new WP_Error('already_rejected', __('Cannot send estimate that has been rejected.', 'cheapalarms'), ['status' => 400]);
-        }
-
         // Rate limiting: Prevent sending again within 30 seconds (prevents accidental double-clicks)
         $lastSentAt = $portalMeta['quote']['sentAt'] ?? null;
         if ($lastSentAt) {
@@ -621,6 +622,12 @@ class EstimateService
         // Send estimate-specific email (not generic portal invite)
         $sent = $portalService->sendEstimateEmail($estimateId, $contact, $locationId, $portalUrl, $resetUrl);
 
+        // If sendEstimateEmail returned WP_Error, pass it through (it already has specific error details)
+        if (is_wp_error($sent)) {
+            return $sent;
+        }
+
+        // If it returned false (shouldn't happen with new implementation, but handle for safety)
         if (!$sent) {
             return new WP_Error(
                 'email_failed',
@@ -639,30 +646,54 @@ class EstimateService
         $estimateTotal = $estimate['total'] ?? 0;
         $estimateCurrency = $estimate['currency'] ?? 'AUD';
         
+        // Check if photos are required
+        $photosRequired = !empty($portalMeta['quote']['photos_required']);
+        
+        // Increment revision number
+        $currentRevision = $portalMeta['quote']['revisionNumber'] ?? 0;
+        $newRevision = $currentRevision + 1;
+        
+        // If estimate was rejected, treat this as a new revision (reset status, log transition)
+        $isRejectedRevision = ($quoteStatus === 'rejected');
+        if ($isRejectedRevision) {
+            $this->logger->info('Sending new revision after rejection', [
+                'estimateId' => $estimateId,
+                'previousStatus' => 'rejected',
+                'rejectedAt' => $portalMeta['quote']['rejectedAt'] ?? null,
+                'rejectionReason' => $portalMeta['quote']['rejectionReason'] ?? null,
+                'newRevision' => $newRevision,
+                'previousRevision' => $currentRevision,
+            ]);
+        }
+        
         // Update quote meta with sent tracking
         // When resending, reset status to 'sent' to allow customer to review/accept again
-        // Only preserve 'rejected' status (customer explicitly rejected, don't reset)
+        // If previously rejected, this becomes a new revision (status reset to 'sent')
         $quoteUpdate = array_merge($portalMeta['quote'] ?? [], [
             'sentAt' => $sentAt,
             'sendCount' => $sendCount,
             'lastSentMethod' => $method,
-            // Reset to 'sent' unless explicitly rejected (allows re-review after acceptance)
-            'status' => ($quoteStatus === 'rejected') ? 'rejected' : 'sent',
-            'statusLabel' => ($quoteStatus === 'rejected') 
-                ? ($portalMeta['quote']['statusLabel'] ?? 'Rejected') 
-                : 'Sent',
-            'approval_requested' => false, // NEW: Reset approval request when resending
-            'acceptance_enabled' => false, // NEW: Reset acceptance enabled when resending
+            // Reset to 'sent' (even if previously rejected - this is a new revision)
+            'status' => 'sent',
+            'statusLabel' => 'Sent',
+            'approval_requested' => false, // Reset approval request when resending
+            // AUTO-ENABLE ACCEPTANCE if no photos required (customer can accept immediately)
+            'acceptance_enabled' => !$photosRequired, // true if no photos, false if photos required
+            'revisionNumber' => $newRevision, // Track revision number (incremented for new revisions)
             // Store estimate snapshot for fast dashboard loading
             'number' => $estimateNumber,
             'total' => $estimateTotal,
             'currency' => $estimateCurrency,
             'last_synced_at' => current_time('mysql'),
+            // Preserve rejection history (for audit trail, but don't block new revision)
+            // Note: rejectedAt and rejectionReason remain in meta for historical reference
         ]);
         
-        // Update workflow status to 'sent' (NEW: Changed from 'reviewing' to 'sent')
+        // Update workflow status
+        // If no photos required, set to 'ready_to_accept' so customer can accept immediately
+        // If photos required, set to 'sent' so customer must upload photos first
         $workflowUpdate = array_merge($portalMeta['workflow'] ?? [], [
-            'status' => 'sent',
+            'status' => !$photosRequired ? 'ready_to_accept' : 'sent', // CHANGED: ready_to_accept if no photos
             'currentStep' => 2,
         ]);
         
@@ -951,13 +982,19 @@ class EstimateService
             return new WP_Error('not_found', __('Estimate not found.', 'cheapalarms'), ['status' => 404]);
         }
 
+        // Ensure businessDetails has a name (required by GHL API)
+        $businessDetails = $record['businessDetails'] ?? [];
+        if (empty($businessDetails['name'])) {
+            $businessDetails = ['name' => 'Cheap Alarms'];
+        }
+        
         $payload = [
             'estimateId'        => $estimateId,
             'altId'             => $locationId,
             'altType'           => 'location',
             'name'              => mb_substr((string)($record['name'] ?? 'Estimate'), 0, 40),
             'title'             => (string)($record['title'] ?? 'ESTIMATE'),
-            'businessDetails'   => (array)($record['businessDetails'] ?? ['name' => 'Cheap Alarms']),
+            'businessDetails'   => (array)$businessDetails,
             'currency'          => (string)($record['currency'] ?? ($record['currencyOptions']['code'] ?? 'USD')),
             'discount'          => (array)($record['discount'] ?? ['type' => 'percentage', 'value' => 0]),
             'contactDetails'    => $this->extractContactDetails($record),
@@ -1016,13 +1053,19 @@ class EstimateService
         }
         $finalTerms = $noteHtml . "\n" . $existingTerms;
 
+        // Ensure businessDetails has a name (required by GHL API)
+        $businessDetails = $record['businessDetails'] ?? [];
+        if (empty($businessDetails['name'])) {
+            $businessDetails = ['name' => 'Cheap Alarms'];
+        }
+        
         $payload = [
             'estimateId'        => $estimateId,
             'altId'             => $locationId,
             'altType'           => 'location',
             'name'              => $this->truncateName($record['name'] ?? $record['title'] ?? 'Estimate'),
             'title'             => $record['title'] ?? 'ESTIMATE',
-            'businessDetails'   => $record['businessDetails'] ?? ['name' => 'Cheap Alarms'],
+            'businessDetails'   => $businessDetails,
             'currency'          => $record['currency'] ?? ($record['currencyOptions']['code'] ?? 'USD'),
             'discount'          => $record['discount'] ?? ['type' => 'percentage', 'value' => 0],
             'contactDetails'    => $this->extractContactDetails($record),
@@ -1312,10 +1355,16 @@ class EstimateService
             ];
         }
 
+        // Ensure businessDetails has a name (required by GHL API)
+        $businessDetails = $record['businessDetails'] ?? [];
+        if (empty($businessDetails['name'])) {
+            $businessDetails = ['name' => 'Cheap Alarms'];
+        }
+
         return [
             'name'              => $this->truncateName($record['name'] ?? $record['title'] ?? 'Estimate'),
             'title'             => $record['title'] ?? 'ESTIMATE',
-            'businessDetails'   => $record['businessDetails'] ?? ['name' => 'Cheap Alarms'],
+            'businessDetails'   => $businessDetails,
             'currency'          => $record['currency'] ?? ($record['currencyOptions']['code'] ?? 'USD'),
             'discount'          => $record['discount'] ?? ['type' => 'percentage', 'value' => 0],
             'contactDetails'    => $this->extractContactDetails($record),

@@ -222,6 +222,9 @@ class PortalService
             'canAccept'   => !$isAccepted && !$isRejectedInPortal && $acceptanceEnabled && $isReadyToAccept, // Can only accept when acceptance is enabled and workflow is ready_to_accept
             'approval_requested' => $meta['quote']['approval_requested'] ?? false, // NEW: Include approval_requested flag
             'acceptance_enabled' => $acceptanceEnabled, // Include acceptance_enabled flag
+            // NEW: Include revisionNumber and photos_required for frontend
+            'revisionNumber' => $meta['quote']['revisionNumber'] ?? null,
+            'photos_required' => !empty($meta['quote']['photos_required']),
         ];
         
         // Store estimate snapshot data for fast dashboard loading (no GHL calls needed)
@@ -2366,7 +2369,18 @@ class PortalService
         // Send via GHL if contactId available (all customer emails must use GHL)
         $sent = false;
         if ($contactId) {
-            $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+            $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+            if (is_wp_error($result)) {
+                $this->logger->error('Failed to send portal invite email via GHL', [
+                    'email' => $email,
+                    'contactId' => $contactId,
+                    'error' => $result->get_error_message(),
+                    'error_code' => $result->get_error_code(),
+                ]);
+                $sent = false;
+            } else {
+                $sent = $result === true;
+            }
         } else {
             // Fallback: Try to get contactId from estimate
             if ($estimateId && $locationId) {
@@ -2377,7 +2391,18 @@ class PortalService
                 if (!is_wp_error($estimate)) {
                     $contactId = $estimate['contact']['id'] ?? null;
                     if ($contactId) {
-                        $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                        $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                        if (is_wp_error($result)) {
+                            $this->logger->error('Failed to send portal invite email via GHL', [
+                                'email' => $email,
+                                'contactId' => $contactId,
+                                'error' => $result->get_error_message(),
+                                'error_code' => $result->get_error_code(),
+                            ]);
+                            $sent = false;
+                        } else {
+                            $sent = $result === true;
+                        }
                     }
                 }
             }
@@ -2408,18 +2433,22 @@ class PortalService
     }
 
     /**
-     * Send email via GHL Conversations API
+     * Send email via GoHighLevel Conversations API
+     * 
      * @param string $contactId GHL contact ID
      * @param string $subject Email subject
      * @param string $htmlBody Email HTML body
-     * @return bool Success status
+     * @return bool|WP_Error Returns true on success, WP_Error on failure with specific error codes
      */
-    private function sendEmailViaGhl(string $contactId, string $subject, string $htmlBody): bool
+    private function sendEmailViaGhl(string $contactId, string $subject, string $htmlBody): bool|WP_Error
     {
         try {
             if (empty($contactId)) {
-                $this->logger->warning('Cannot send GHL email without contactId');
-                return false;
+                return new WP_Error(
+                    'email_contact_missing',
+                    __('Cannot send email: Contact ID is missing.', 'cheapalarms'),
+                    ['status' => 400]
+                );
             }
 
             $ghlClient = $this->container->get(GhlClient::class);
@@ -2441,12 +2470,53 @@ class PortalService
             $result = $ghlClient->post('/conversations/messages', $payload);
             
             if (is_wp_error($result)) {
+                $errorCode = $result->get_error_code();
+                $errorData = $result->get_error_data();
+                $httpCode = $errorData['code'] ?? 500;
+                $body = $errorData['body'] ?? '';
+                
+                // Parse GHL error response to extract meaningful message
+                $ghlMessage = $this->parseGhlErrorMessage($body, $httpCode);
+                
                 $this->logger->error('GHL email API failed', [
                     'contactId' => $contactId,
                     'subject' => $subject,
                     'error' => $result->get_error_message(),
+                    'httpCode' => $httpCode,
+                    'ghlMessage' => $ghlMessage,
                 ]);
-                return false;
+                
+                // Return specific error based on HTTP code and message
+                if ($httpCode === 400) {
+                    // 400 usually means invalid email or contact issue
+                    if (stripos($ghlMessage, 'email') !== false || stripos($ghlMessage, 'invalid') !== false) {
+                        return new WP_Error(
+                            'email_invalid',
+                            sprintf(__('Invalid email address: %s', 'cheapalarms'), $ghlMessage ?: __('The email address appears to be invalid or undeliverable.', 'cheapalarms')),
+                            ['status' => 400, 'ghl_message' => $ghlMessage]
+                        );
+                    }
+                    return new WP_Error(
+                        'email_bad_request',
+                        sprintf(__('Email sending failed: %s', 'cheapalarms'), $ghlMessage ?: __('Invalid request to email service.', 'cheapalarms')),
+                        ['status' => 400, 'ghl_message' => $ghlMessage]
+                    );
+                }
+                
+                if ($httpCode === 404) {
+                    return new WP_Error(
+                        'email_contact_not_found',
+                        __('Contact not found in email service. This may indicate a dummy or invalid email address.', 'cheapalarms'),
+                        ['status' => 404, 'ghl_message' => $ghlMessage]
+                    );
+                }
+                
+                // Generic GHL API error
+                return new WP_Error(
+                    'ghl_api_error',
+                    sprintf(__('Email service error: %s', 'cheapalarms'), $ghlMessage ?: __('Unable to send email. Please try again.', 'cheapalarms')),
+                    ['status' => $httpCode, 'ghl_message' => $ghlMessage]
+                );
             }
             
             $this->logger->info('Email sent via GHL', [
@@ -2460,29 +2530,63 @@ class PortalService
                 'contactId' => $contactId,
                 'error' => $e->getMessage(),
             ]);
-            return false;
+            return new WP_Error(
+                'email_exception',
+                __('An unexpected error occurred while sending email.', 'cheapalarms'),
+                ['status' => 500, 'exception' => $e->getMessage()]
+            );
         }
     }
 
     /**
-     * Send estimate-specific email (for admin "Send Estimate" action).
-     * Different from generic portal invite - focuses on the estimate.
-     *
-     * @param string $estimateId Estimate ID
-     * @param array $contact Contact array from estimate
-     * @param string $locationId Location ID
-     * @param string $portalUrl Portal URL with invite token
-     * @param string|null $resetUrl Password reset URL (if account exists)
-     * @return bool Success status
+     * Parse GHL error response to extract user-friendly message
+     * 
+     * @param string $body Response body from GHL API
+     * @param int $httpCode HTTP status code
+     * @return string Parsed error message
      */
-    public function sendEstimateEmail(string $estimateId, array $contact, string $locationId, string $portalUrl, ?string $resetUrl = null): bool
+    private function parseGhlErrorMessage(string $body, int $httpCode): string
+    {
+        if (empty($body)) {
+            return '';
+        }
+        
+        // Try to parse JSON response
+        $decoded = json_decode($body, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            // GHL error structure: { "message": "...", "error": "...", "statusCode": 400 }
+            $message = $decoded['message'] ?? $decoded['error'] ?? '';
+            if (!empty($message)) {
+                return $message;
+            }
+        }
+        
+        // Fallback: return first 200 chars of body (sanitized)
+        return substr(strip_tags($body), 0, 200);
+    }
+
+    /**
+     * Send estimate email to contact
+     * 
+     * @param string $estimateId Estimate ID
+     * @param array $contact Contact array with email and id
+     * @param string $locationId GHL location ID
+     * @param string $portalUrl Portal URL for the estimate
+     * @param string|null $resetUrl Optional password reset URL
+     * @return bool|WP_Error Returns true on success, WP_Error on failure with specific error codes
+     */
+    public function sendEstimateEmail(string $estimateId, array $contact, string $locationId, string $portalUrl, ?string $resetUrl = null): bool|WP_Error
     {
         $email = sanitize_email($contact['email'] ?? '');
         if (!$email) {
             $this->logger->warning('Cannot send estimate email: No contact email', [
                 'estimateId' => $estimateId,
             ]);
-            return false;
+            return new WP_Error(
+                'email_missing',
+                __('Cannot send estimate: Contact email address is missing.', 'cheapalarms'),
+                ['status' => 400]
+            );
         }
 
         $contactId = $contact['id'] ?? null;
@@ -2491,7 +2595,11 @@ class PortalService
                 'estimateId' => $estimateId,
                 'email' => $email,
             ]);
-            return false;
+            return new WP_Error(
+                'contact_missing',
+                __('Cannot send estimate: Contact is missing GHL contact ID. This may indicate a dummy or invalid email address. Please ensure the contact has a valid email address in GoHighLevel.', 'cheapalarms'),
+                ['status' => 400]
+            );
         }
 
         // Get estimate details for email content
@@ -2576,17 +2684,23 @@ class PortalService
         // Send via GHL Conversations API
         $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
 
+        // If sendEmailViaGhl returned WP_Error, pass it through
+        if (is_wp_error($sent)) {
+            return $sent;
+        }
+
+        // At this point, sendEmailViaGhl returned true (success)
         $variation = isset($emailTemplate) ? ($emailTemplate['variation'] ?? 'A') : 'A';
         $this->logger->info('Estimate email sent', [
             'estimateId' => $estimateId,
             'estimateNumber' => $estimateNumber,
             'email' => $email,
             'contactId' => $contactId,
-            'sent' => $sent,
+            'sent' => true,
             'variation' => $variation,
         ]);
 
-        return $sent;
+        return true;
     }
 
     /**
@@ -2714,7 +2828,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send invoice ready email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for invoice email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -3104,7 +3230,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send acceptance email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for acceptance email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -3314,7 +3452,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send booking email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for booking email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -3498,7 +3648,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send payment email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for payment email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -3900,7 +4062,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send changes requested email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for changes requested email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -4078,7 +4252,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send review completion email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for review completion email, cannot send via GHL', [
                     'estimateId' => $estimateId,
@@ -4614,7 +4800,19 @@ class PortalService
             $sent = false;
             
             if ($contactId) {
-                $sent = $this->sendEmailViaGhl($contactId, $subject, $body);
+                $result = $this->sendEmailViaGhl($contactId, $subject, $body);
+                if (is_wp_error($result)) {
+                    $this->logger->error('Failed to send revision email via GHL', [
+                        'estimateId' => $estimateId,
+                        'contactId' => $contactId,
+                        'email' => $email,
+                        'error' => $result->get_error_message(),
+                        'error_code' => $result->get_error_code(),
+                    ]);
+                    $sent = false;
+                } else {
+                    $sent = $result === true;
+                }
             } else {
                 $this->logger->warning('No GHL contact ID for revision email, cannot send via GHL', [
                     'estimateId' => $estimateId,

@@ -410,6 +410,51 @@ class EstimateSnapshotRepository
     }
 
     /**
+     * Find all soft-deleted estimates in trash (for empty trash functionality)
+     *
+     * @param string $locationId
+     * @return array<int, array<string, mixed>>|WP_Error
+     */
+    public function findAllInTrash(string $locationId): array|WP_Error
+    {
+        global $wpdb;
+        
+        if (!$locationId) {
+            return new WP_Error('bad_request', 'locationId is required', ['status' => 400]);
+        }
+        
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT estimate_id, location_id
+                 FROM {$this->tableName}
+                 WHERE location_id = %s 
+                 AND deleted_at IS NOT NULL
+                 ORDER BY deleted_at DESC",
+                $locationId
+            ),
+            ARRAY_A
+        );
+        
+        // Check for database errors first (more explicit error handling)
+        if ($wpdb->last_error) {
+            return new WP_Error('db_error', 'Failed to read trash', [
+                'status' => 500,
+                'details' => $wpdb->last_error,
+            ]);
+        }
+        
+        // get_results returns null on error, empty array on no results
+        if ($rows === null) {
+            return new WP_Error('db_error', 'Failed to read trash', [
+                'status' => 500,
+                'details' => $wpdb->last_error ?: 'Unknown database error',
+            ]);
+        }
+        
+        return $rows;
+    }
+
+    /**
      * Find expired soft-deletes (older than 30 days, ready for permanent deletion)
      *
      * @param int $batchSize

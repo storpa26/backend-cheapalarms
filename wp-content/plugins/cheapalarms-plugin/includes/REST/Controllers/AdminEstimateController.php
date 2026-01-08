@@ -51,6 +51,94 @@ class AdminEstimateController extends AdminController
             },
         ]);
 
+        // List trash (soft-deleted estimates) - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/estimates/trash', [
+            'methods'             => 'GET',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->listTrash($request);
+            },
+        ]);
+
+        // Bulk restore estimates - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/estimates/bulk-restore', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->bulkRestore($request);
+            },
+        ]);
+
+        // Bulk delete estimates - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/estimates/bulk-delete', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->bulkDelete($request);
+            },
+        ]);
+
+        // Empty trash (permanently delete all soft-deleted estimates) - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/estimates/trash/empty', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->emptyTrash($request);
+            },
+        ]);
+
+        // Non-blocking snapshot refresh for admin lists (WP-Cron) - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/estimates/sync-snapshots', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+
+                $locationIdResult = $this->resolveLocationId($request);
+                if (is_wp_error($locationIdResult)) {
+                    return $this->respond($locationIdResult);
+                }
+                $locationId = $locationIdResult;
+
+                $already = wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId]);
+                if (!$already) {
+                    wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
+                }
+
+                return $this->respond([
+                    'ok'              => true,
+                    'scheduled'       => $already ? false : true,
+                    'alreadyScheduled'=> $already ? true : false,
+                    'locationId'      => $locationId,
+                ]);
+            },
+        ]);
+
+        // Now register the parameterized route (matches any estimateId) - MUST be after specific routes
         register_rest_route('ca/v1', '/admin/estimates/(?P<estimateId>[a-zA-Z0-9]+)', [
             'methods'             => 'GET',
             'permission_callback' => fn () => true,
@@ -202,65 +290,6 @@ class AdminEstimateController extends AdminController
                     'type'     => 'string',
                 ],
             ],
-        ]);
-
-        // List trash (soft-deleted estimates)
-        register_rest_route('ca/v1', '/admin/estimates/trash', [
-            'methods'             => 'GET',
-            'permission_callback' => fn () => true,
-            'callback'            => function (WP_REST_Request $request) {
-                $this->ensureUserLoaded();
-                $authCheck = $this->auth->requireCapability('ca_manage_portal');
-                if (is_wp_error($authCheck)) {
-                    return $this->respond($authCheck);
-                }
-                return $this->listTrash($request);
-            },
-        ]);
-
-        // Bulk restore estimates
-        register_rest_route('ca/v1', '/admin/estimates/bulk-restore', [
-            'methods'             => 'POST',
-            'permission_callback' => fn () => true,
-            'callback'            => function (WP_REST_Request $request) {
-                $this->ensureUserLoaded();
-                $authCheck = $this->auth->requireCapability('ca_manage_portal');
-                if (is_wp_error($authCheck)) {
-                    return $this->respond($authCheck);
-                }
-                return $this->bulkRestore($request);
-            },
-        ]);
-
-        // Non-blocking snapshot refresh for admin lists (WP-Cron).
-        register_rest_route('ca/v1', '/admin/estimates/sync-snapshots', [
-            'methods'             => 'POST',
-            'permission_callback' => fn () => true,
-            'callback'            => function (WP_REST_Request $request) {
-                $this->ensureUserLoaded();
-                $authCheck = $this->auth->requireCapability('ca_manage_portal');
-                if (is_wp_error($authCheck)) {
-                    return $this->respond($authCheck);
-                }
-
-                $locationIdResult = $this->resolveLocationId($request);
-                if (is_wp_error($locationIdResult)) {
-                    return $this->respond($locationIdResult);
-                }
-                $locationId = $locationIdResult;
-
-                $already = wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId]);
-                if (!$already) {
-                    wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
-                }
-
-                return $this->respond([
-                    'ok'              => true,
-                    'scheduled'       => $already ? false : true,
-                    'alreadyScheduled'=> $already ? true : false,
-                    'locationId'      => $locationId,
-                ]);
-            },
         ]);
     }
 
@@ -591,6 +620,8 @@ class AdminEstimateController extends AdminController
                 'workflow'   => $meta['workflow'] ?? null,
                 'booking'    => $meta['booking'] ?? null,
                 'payment'    => $meta['payment'] ?? null,
+                // CRITICAL: Include quote data (contains revisionNumber, acceptance_enabled, status, etc.)
+                'quote'      => $meta['quote'] ?? null,
             ],
             'linkedInvoice' => $linkedInvoice,
         ]);
@@ -974,6 +1005,103 @@ class AdminEstimateController extends AdminController
     }
 
     /**
+     * Empty trash (permanently delete all soft-deleted estimates)
+     * 
+     * POST /ca/v1/admin/estimates/trash/empty
+     */
+    public function emptyTrash(WP_REST_Request $request): WP_REST_Response
+    {
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        // Increase time limit for large batch operations (matches LogController pattern)
+        $originalTimeLimit = ini_get('max_execution_time');
+        @set_time_limit(300); // 5 minutes for large batches
+
+        try {
+            $body = $request->get_json_params() ?? [];
+            $confirm = sanitize_text_field($body['confirm'] ?? '');
+
+            if ($confirm !== 'EMPTY_TRASH') {
+                return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="EMPTY_TRASH"', 'cheapalarms'), ['status' => 400]));
+            }
+
+            $locationIdResult = $this->resolveLocationId($request);
+            if (is_wp_error($locationIdResult)) {
+                return $this->respond($locationIdResult);
+            }
+            $locationId = $locationIdResult;
+
+            // Get all soft-deleted estimates for this location
+            $trashItems = $this->snapshotRepo->findAllInTrash($locationId);
+            
+            if (is_wp_error($trashItems)) {
+                return $this->respond($trashItems);
+            }
+
+            if (empty($trashItems)) {
+                return $this->respond([
+                    'ok' => true,
+                    'deleted' => 0,
+                    'message' => 'Trash is already empty',
+                ]);
+            }
+
+            $deleted = 0;
+            $errors = [];
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+
+            // Process in batches for better performance
+            $batchSize = 100;
+            $batches = array_chunk($trashItems, $batchSize);
+
+            foreach ($batches as $batch) {
+                foreach ($batch as $row) {
+                    $estimateId = $row['estimate_id'] ?? null;
+                    
+                    if (!$estimateId) {
+                        continue;
+                    }
+
+                    // Hard delete from snapshot table (location-scoped)
+                    $result = $this->snapshotRepo->hardDelete($estimateId, $locationId);
+                    
+                    if (is_wp_error($result)) {
+                        $errors[] = ['estimateId' => $estimateId, 'error' => $result->get_error_message()];
+                    } else {
+                        $deleted++;
+                        
+                        // Also hard delete related options (if still exist)
+                        delete_option('ca_portal_meta_' . $estimateId);
+                        delete_option('ca_estimate_uploads_' . $estimateId);
+                        delete_option('ca_estimate_job_link_' . $estimateId);
+                    }
+                }
+            }
+
+            $logger->info('Trash emptied', [
+                'locationId' => $locationId,
+                'deleted' => $deleted,
+                'errors' => count($errors),
+            ]);
+
+            return $this->respond([
+                'ok' => true,
+                'deleted' => $deleted,
+                'errors' => $errors,
+                'message' => sprintf(__('%d estimate(s) permanently deleted', 'cheapalarms'), $deleted),
+            ]);
+        } finally {
+            // Always restore original time limit if it wasn't unlimited (even if exception occurs)
+            if ($originalTimeLimit !== false && $originalTimeLimit !== '0') {
+                @set_time_limit((int)$originalTimeLimit);
+            }
+        }
+    }
+
+    /**
      * List trash (soft-deleted estimates)
      * 
      * GET /ca/v1/admin/estimates/trash
@@ -1129,6 +1257,145 @@ class AdminEstimateController extends AdminController
             'total' => count($estimateIds),
             'errors' => $errors,
         ]);
+    }
+
+    /**
+     * POST /ca/v1/admin/estimates/bulk-delete
+     * Permanently delete multiple estimates (moves to trash for local scope)
+     */
+    public function bulkDelete(WP_REST_Request $request): WP_REST_Response
+    {
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $body = $request->get_json_params() ?? [];
+        $confirm = sanitize_text_field($body['confirm'] ?? '');
+        $estimateIds = $body['estimateIds'] ?? [];
+        $scope = sanitize_text_field($body['scope'] ?? 'both');
+        $requestLocationId = !empty($body['locationId']) ? sanitize_text_field($body['locationId']) : null;
+
+        if ($confirm !== 'BULK_DELETE') {
+            return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="BULK_DELETE"', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!is_array($estimateIds) || empty($estimateIds)) {
+            return $this->respond(new WP_Error('bad_request', __('estimateIds array is required', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!in_array($scope, ['local', 'ghl', 'both'], true)) {
+            return $this->respond(new WP_Error('bad_request', __('Invalid scope. Must be: local, ghl, or both.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        // Validate each ID is a valid string/numeric
+        foreach ($estimateIds as $id) {
+            if (!is_string($id) && !is_numeric($id)) {
+                return $this->respond(new WP_Error('bad_request', __('Invalid estimate ID format. All IDs must be strings or numbers.', 'cheapalarms'), ['status' => 400]));
+            }
+        }
+
+        // Limit batch size for performance
+        $maxBatchSize = 1000;
+        if (count($estimateIds) > $maxBatchSize) {
+            return $this->respond(new WP_Error('bad_request', sprintf(__('Maximum %d estimates per batch', 'cheapalarms'), $maxBatchSize), ['status' => 400]));
+        }
+
+        $originalTimeLimit = ini_get('max_execution_time');
+        @set_time_limit(300); // 5 minutes for large batches
+
+        try {
+            $user = wp_get_current_user();
+            $deleted = 0;
+            $errors = [];
+
+            // PHASE 1: Batch fetch all locationIds in ONE query (prevents N+1)
+            $locationIdMap = [];
+            
+            if (!$requestLocationId) {
+                // Only batch fetch if locationId not provided in request
+                $sanitizedEstimateIds = array_map('sanitize_text_field', array_filter($estimateIds, fn($id) => !empty($id)));
+                if (!empty($sanitizedEstimateIds)) {
+                    global $wpdb;
+                    $placeholders = implode(',', array_fill(0, count($sanitizedEstimateIds), '%s'));
+                    $query = $wpdb->prepare(
+                        "SELECT estimate_id, location_id FROM {$wpdb->prefix}ca_estimate_snapshots WHERE estimate_id IN ($placeholders)",
+                        ...$sanitizedEstimateIds
+                    );
+                    $results = $wpdb->get_results($query, ARRAY_A);
+                    
+                    // Check for database errors
+                    if ($wpdb->last_error) {
+                        if (function_exists('error_log')) {
+                            error_log(sprintf(
+                                '[CheapAlarms] Database error in bulkDelete: %s',
+                                $wpdb->last_error
+                            ));
+                        }
+                        // Continue with empty map - will result in errors for affected estimates
+                    } elseif (is_array($results)) {
+                        foreach ($results as $row) {
+                            if (!empty($row['estimate_id']) && !empty($row['location_id'])) {
+                                $locationIdMap[$row['estimate_id']] = $row['location_id'];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // PHASE 2: Process in batches of 100 for better performance
+            $batchSize = 100;
+            $batches = array_chunk($estimateIds, $batchSize);
+
+            foreach ($batches as $batch) {
+                foreach ($batch as $estimateId) {
+                    $estimateId = sanitize_text_field($estimateId);
+                    if (empty($estimateId)) {
+                        continue;
+                    }
+
+                    // Get locationId from request, batch map, or skip if not found
+                    $locationId = $requestLocationId ?? ($locationIdMap[$estimateId] ?? null);
+                    
+                    if (!$locationId && ($scope === 'ghl' || $scope === 'both')) {
+                        $errors[] = ['estimateId' => $estimateId, 'error' => 'Location ID not found'];
+                        continue;
+                    }
+
+                    // Create a mock request for deleteEstimate logic
+                    $deleteRequest = new WP_REST_Request('POST', '/ca/v1/admin/estimates/' . $estimateId . '/delete');
+                    $deleteRequest->set_param('estimateId', $estimateId);
+                    $deleteRequest->set_body_params([
+                        'confirm' => 'DELETE',
+                        'scope' => $scope,
+                        'locationId' => $locationId,
+                    ]);
+
+                    // Call the existing deleteEstimate method
+                    $result = $this->deleteEstimate($deleteRequest);
+                    
+                    // deleteEstimate always returns WP_REST_Response (never raw WP_Error)
+                    $responseData = $result->get_data();
+                    if (isset($responseData['ok']) && $responseData['ok'] === true) {
+                        $deleted++;
+                    } else {
+                        $errors[] = ['estimateId' => $estimateId, 'error' => $responseData['error'] ?? 'Delete failed'];
+                    }
+                }
+            }
+
+            return $this->respond([
+                'ok' => true,
+                'deleted' => $deleted,
+                'errors' => $errors,
+                'scope' => $scope,
+            ]);
+        } finally {
+            // Always restore original time limit
+            if ($originalTimeLimit !== false && $originalTimeLimit !== '0') {
+                @set_time_limit((int)$originalTimeLimit);
+            }
+        }
     }
 
     /**

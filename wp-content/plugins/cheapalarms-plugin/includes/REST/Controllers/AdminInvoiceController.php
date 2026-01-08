@@ -39,6 +39,20 @@ class AdminInvoiceController extends AdminController
             },
         ]);
 
+        // Bulk delete invoices - MUST be registered BEFORE the parameterized route
+        register_rest_route('ca/v1', '/admin/invoices/bulk-delete', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->bulkDelete($request);
+            },
+        ]);
+
         register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)', [
             'methods'             => 'GET',
             'permission_callback' => fn () => true,
@@ -525,6 +539,102 @@ class AdminInvoiceController extends AdminController
         }
 
         return $this->respond($result);
+    }
+
+    /**
+     * POST /ca/v1/admin/invoices/bulk-delete
+     * Permanently delete multiple invoices
+     */
+    public function bulkDelete(WP_REST_Request $request): WP_REST_Response
+    {
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        $body = $request->get_json_params() ?? [];
+        $confirm = sanitize_text_field($body['confirm'] ?? '');
+        $invoiceIds = $body['invoiceIds'] ?? [];
+        $scope = sanitize_text_field($body['scope'] ?? 'both');
+        $requestLocationId = !empty($body['locationId']) ? sanitize_text_field($body['locationId']) : null;
+
+        if ($confirm !== 'BULK_DELETE') {
+            return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="BULK_DELETE"', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!is_array($invoiceIds) || empty($invoiceIds)) {
+            return $this->respond(new WP_Error('bad_request', __('invoiceIds array is required', 'cheapalarms'), ['status' => 400]));
+        }
+
+        if (!in_array($scope, ['local', 'ghl', 'both'], true)) {
+            return $this->respond(new WP_Error('bad_request', __('Invalid scope. Must be: local, ghl, or both.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        // Validate each ID is a valid string/numeric
+        foreach ($invoiceIds as $id) {
+            if (!is_string($id) && !is_numeric($id)) {
+                return $this->respond(new WP_Error('bad_request', __('Invalid invoice ID format. All IDs must be strings or numbers.', 'cheapalarms'), ['status' => 400]));
+            }
+        }
+
+        // Limit batch size for performance
+        $maxBatchSize = 1000;
+        if (count($invoiceIds) > $maxBatchSize) {
+            return $this->respond(new WP_Error('bad_request', sprintf(__('Maximum %d invoices per batch', 'cheapalarms'), $maxBatchSize), ['status' => 400]));
+        }
+
+        $originalTimeLimit = ini_get('max_execution_time');
+        @set_time_limit(300); // 5 minutes for large batches
+
+        try {
+            $deleted = 0;
+            $errors = [];
+
+            // Process in batches of 100 for better performance
+            $batchSize = 100;
+            $batches = array_chunk($invoiceIds, $batchSize);
+
+            foreach ($batches as $batch) {
+                foreach ($batch as $invoiceId) {
+                    $invoiceId = sanitize_text_field($invoiceId);
+                    if (empty($invoiceId)) {
+                        continue;
+                    }
+
+                    // Create a mock request for deleteInvoice logic
+                    $deleteRequest = new WP_REST_Request('POST', '/ca/v1/admin/invoices/' . $invoiceId . '/delete');
+                    $deleteRequest->set_param('invoiceId', $invoiceId);
+                    $deleteRequest->set_body_params([
+                        'confirm' => 'DELETE',
+                        'scope' => $scope,
+                        'locationId' => $requestLocationId,
+                    ]);
+
+                    // Call the existing deleteInvoice method
+                    $result = $this->deleteInvoice($deleteRequest);
+                    
+                    // deleteInvoice always returns WP_REST_Response (never raw WP_Error)
+                    $responseData = $result->get_data();
+                    if (isset($responseData['ok']) && $responseData['ok'] === true) {
+                        $deleted++;
+                    } else {
+                        $errors[] = ['invoiceId' => $invoiceId, 'error' => $responseData['error'] ?? 'Delete failed'];
+                    }
+                }
+            }
+
+            return $this->respond([
+                'ok' => true,
+                'deleted' => $deleted,
+                'errors' => $errors,
+                'scope' => $scope,
+            ]);
+        } finally {
+            // Always restore original time limit
+            if ($originalTimeLimit !== false && $originalTimeLimit !== '0') {
+                @set_time_limit((int)$originalTimeLimit);
+            }
+        }
     }
 
     /**
