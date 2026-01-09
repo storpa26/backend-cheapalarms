@@ -464,11 +464,13 @@ class UsersController implements ControllerInterface
                     // Create a mock request for deleteUser logic
                     $deleteRequest = new WP_REST_Request('POST', '/ca/v1/admin/users/' . $userId . '/delete');
                     $deleteRequest->set_param('userId', $userId);
-                    $deleteRequest->set_body_params([
+                    // Set body as JSON string so get_json_params() can parse it
+                    $deleteRequest->set_body(wp_json_encode([
                         'confirm' => 'DELETE',
                         'scope' => $scope,
                         'locationId' => $requestLocationId,
-                    ]);
+                    ]));
+                    $deleteRequest->set_header('Content-Type', 'application/json');
 
                     // Call the existing deleteUser method
                     $result = $this->deleteUser($deleteRequest);

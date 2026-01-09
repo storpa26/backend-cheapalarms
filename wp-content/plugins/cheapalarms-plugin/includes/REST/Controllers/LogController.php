@@ -98,11 +98,21 @@ class LogController implements ControllerInterface
             // Get log file path
             $logPath = $this->getLogFilePath();
             if (!$logPath) {
-                return $this->errorResponse(new WP_Error(
-                    'log_file_not_found',
-                    'Log file not configured or not found.',
-                    ['status' => 404]
-                ));
+                // Return empty logs instead of error (file might not exist yet or logging disabled)
+                // This is better UX - admin can still access the page
+                $response = new WP_REST_Response([
+                    'ok'        => true,
+                    'logs'      => [],
+                    'total'     => 0,
+                    'file_size' => 0,
+                    'file_path' => '[NOT CONFIGURED]',
+                    'message'   => defined('WP_DEBUG_LOG') && WP_DEBUG_LOG === false
+                        ? 'Logging is disabled. Set WP_DEBUG_LOG=true in wp-config.php to enable logs.'
+                        : 'Log file not found. Ensure logging is enabled in wp-config.php or PHP error_log is configured.',
+                ], 200);
+                
+                $this->addSecurityHeaders($response);
+                return $response;
             }
 
             // Check file size (prevent reading huge files)
@@ -159,72 +169,79 @@ class LogController implements ControllerInterface
     }
 
     /**
-     * Get WordPress debug log file path
+     * Get log file path (prioritizes PHP error_log since that's where plugin logs)
      */
     private function getLogFilePath(): ?string
     {
-        // Check WP_DEBUG_LOG constant
-        if (defined('WP_DEBUG_LOG')) {
+        $path = null;
+        
+        // PRIORITY 1: Check PHP error_log first (where plugin's Logger service actually writes)
+        // This is the most reliable source since error_log() always uses PHP's error_log setting
+        $phpLogPath = ini_get('error_log');
+        if (!empty($phpLogPath) && file_exists($phpLogPath) && is_readable($phpLogPath)) {
+            $path = $phpLogPath;
+        }
+        
+        // PRIORITY 2: Check WP_DEBUG_LOG (WordPress debug log)
+        if (!$path && defined('WP_DEBUG_LOG')) {
             if (WP_DEBUG_LOG === true || WP_DEBUG_LOG === 'true' || WP_DEBUG_LOG === '1') {
-                $path = WP_CONTENT_DIR . '/debug.log';
+                $wpDebugPath = WP_CONTENT_DIR . '/debug.log';
+                if (file_exists($wpDebugPath) && is_readable($wpDebugPath)) {
+                    $path = $wpDebugPath;
+                }
             } elseif (is_string(WP_DEBUG_LOG) && !empty(WP_DEBUG_LOG)) {
-                $path = WP_DEBUG_LOG;
-            } else {
-                return null;
-            }
-        } else {
-            // Fallback to PHP error_log setting
-            $phpLogPath = ini_get('error_log');
-            if (!empty($phpLogPath) && file_exists($phpLogPath)) {
-                $path = $phpLogPath;
-            } else {
-                return null;
+                if (file_exists(WP_DEBUG_LOG) && is_readable(WP_DEBUG_LOG)) {
+                    $path = WP_DEBUG_LOG;
+                }
             }
         }
-
-        // Validate file exists and is readable
-        if (!file_exists($path) || !is_readable($path)) {
+        
+        // If no valid path found, return null
+        if (!$path) {
             return null;
         }
 
-        // SECURITY: Validate path is within WordPress directory to prevent directory traversal
-        // realpath() resolves symlinks, so we need to ensure the resolved path is still within bounds
+        // SECURITY: Validate path for WordPress debug.log files (must be within WP_CONTENT_DIR)
+        // PHP error_log files are allowed outside WP_CONTENT_DIR (system-level logs)
         $realPath = realpath($path);
         $wpContentRealPath = realpath(WP_CONTENT_DIR);
         
-        if ($realPath === false || $wpContentRealPath === false) {
-            // Log security warning but don't expose path
+        if ($realPath === false) {
+            // Can't resolve path - reject for security
             if (function_exists('error_log')) {
                 error_log('[CheapAlarms] Security: Failed to resolve log file path');
             }
             return null;
         }
         
-        // Normalize path separators for cross-platform compatibility
-        $separator = DIRECTORY_SEPARATOR;
-        $normalizedRealPath = str_replace(['/', '\\'], $separator, $realPath);
-        $normalizedWpContent = str_replace(['/', '\\'], $separator, $wpContentRealPath);
-        
-        // Allow standard debug.log location
-        $standardDebugLog = realpath(WP_CONTENT_DIR . '/debug.log');
-        if ($realPath === $standardDebugLog) {
-            return $path;
-        }
-        
-        // SECURITY: Ensure resolved path is within WP_CONTENT_DIR (prevents symlink traversal)
-        // Check both exact match and subdirectory match
-        $isWithinContentDir = (
-            strpos($normalizedRealPath, $normalizedWpContent . $separator) === 0 ||
-            $normalizedRealPath === $normalizedWpContent
+        // Check if this is a WordPress debug.log path (must be within WP_CONTENT_DIR)
+        $isWordPressLog = (
+            strpos($path, WP_CONTENT_DIR) === 0 ||
+            (defined('WP_DEBUG_LOG') && is_string(WP_DEBUG_LOG) && $path === WP_DEBUG_LOG)
         );
         
-        if (!$isWithinContentDir) {
-            // Log security warning but don't expose path
-            if (function_exists('error_log')) {
-                error_log('[CheapAlarms] Security: Log file path outside WP_CONTENT_DIR rejected (possible symlink traversal attempt)');
+        if ($isWordPressLog && $wpContentRealPath !== false) {
+            // For WordPress logs, enforce WP_CONTENT_DIR restriction
+            $separator = DIRECTORY_SEPARATOR;
+            $normalizedRealPath = str_replace(['/', '\\'], $separator, $realPath);
+            $normalizedWpContent = str_replace(['/', '\\'], $separator, $wpContentRealPath);
+            
+            $isWithinContentDir = (
+                strpos($normalizedRealPath, $normalizedWpContent . $separator) === 0 ||
+                $normalizedRealPath === $normalizedWpContent
+            );
+            
+            if (!$isWithinContentDir) {
+                // Log security warning but don't expose path
+                if (function_exists('error_log')) {
+                    error_log('[CheapAlarms] Security: WordPress log file path outside WP_CONTENT_DIR rejected');
+                }
+                return null;
             }
-            return null;
         }
+        
+        // PHP error_log files are allowed (system-level, typically outside WP_CONTENT_DIR)
+        // No additional security check needed - PHP's ini_get('error_log') is trusted
 
         return $path;
     }

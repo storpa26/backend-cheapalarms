@@ -2454,6 +2454,11 @@ class PortalService
             $ghlClient = $this->container->get(GhlClient::class);
             $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
             
+            // Ensure subject is never empty (GHL might use from email as fallback)
+            if (empty($subject) || trim($subject) === '') {
+                $subject = __('CheapAlarms Notification', 'cheapalarms');
+            }
+            
             $payload = [
                 'contactId' => $contactId,
                 'type' => 'Email',

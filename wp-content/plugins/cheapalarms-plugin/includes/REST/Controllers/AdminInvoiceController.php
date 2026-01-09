@@ -604,11 +604,13 @@ class AdminInvoiceController extends AdminController
                     // Create a mock request for deleteInvoice logic
                     $deleteRequest = new WP_REST_Request('POST', '/ca/v1/admin/invoices/' . $invoiceId . '/delete');
                     $deleteRequest->set_param('invoiceId', $invoiceId);
-                    $deleteRequest->set_body_params([
+                    // Set body as JSON string so get_json_params() can parse it
+                    $deleteRequest->set_body(wp_json_encode([
                         'confirm' => 'DELETE',
                         'scope' => $scope,
                         'locationId' => $requestLocationId,
-                    ]);
+                    ]));
+                    $deleteRequest->set_header('Content-Type', 'application/json');
 
                     // Call the existing deleteInvoice method
                     $result = $this->deleteInvoice($deleteRequest);

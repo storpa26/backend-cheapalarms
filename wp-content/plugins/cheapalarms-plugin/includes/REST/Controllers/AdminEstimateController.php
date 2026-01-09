@@ -1365,11 +1365,13 @@ class AdminEstimateController extends AdminController
                     // Create a mock request for deleteEstimate logic
                     $deleteRequest = new WP_REST_Request('POST', '/ca/v1/admin/estimates/' . $estimateId . '/delete');
                     $deleteRequest->set_param('estimateId', $estimateId);
-                    $deleteRequest->set_body_params([
+                    // Set body as JSON string so get_json_params() can parse it
+                    $deleteRequest->set_body(wp_json_encode([
                         'confirm' => 'DELETE',
                         'scope' => $scope,
                         'locationId' => $locationId,
-                    ]);
+                    ]));
+                    $deleteRequest->set_header('Content-Type', 'application/json');
 
                     // Call the existing deleteEstimate method
                     $result = $this->deleteEstimate($deleteRequest);

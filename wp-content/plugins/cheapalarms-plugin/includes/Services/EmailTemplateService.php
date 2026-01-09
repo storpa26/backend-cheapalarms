@@ -54,10 +54,10 @@ class EmailTemplateService
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                 $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('Welcome to CheapAlarms! We\'re excited to help secure your property.', 'cheapalarms')) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('We\'ve prepared your personalized quote %s based on your requirements. To access your quote and set up your account, please set a password using the link below.', 'cheapalarms'),
                     '<strong>' . esc_html($estimateNumber) . '</strong>'
-                )) . '</p>';
+                ) . '</p>';
                 $body .= '<p style="margin: 0 0 20px 0; line-height: 1.6;">' . esc_html(__('Once you\'ve set your password, you\'ll be able to view your quote, accept it, and track your installation progress.', 'cheapalarms')) . '</p>';
                 $body .= '</div>';
                 $ctas = [];
@@ -82,10 +82,10 @@ class EmailTemplateService
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                 $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('Great to have you back! We\'ve prepared a new quote for you.', 'cheapalarms')) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('Your new quote %s is ready for review.', 'cheapalarms'),
                     '<strong>' . esc_html($estimateNumber) . '</strong>'
-                ));
+                );
                 if ($totalEstimateCount > 1) {
                     $body .= ' ' . esc_html(sprintf(
                         __('This is your %s quote with us.', 'cheapalarms'),
@@ -122,10 +122,10 @@ class EmailTemplateService
                     $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                     $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                     $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('We\'ve prepared another quote for you!', 'cheapalarms')) . '</p>';
-                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                         __('This is your second quote with us. Your new quote %s is ready for review. You also have a previous quote waiting.', 'cheapalarms'),
                         '<strong>' . esc_html($estimateNumber) . '</strong>'
-                    )) . '</p>';
+                    ) . '</p>';
                     $body .= '<p style="margin: 0 0 20px 0; line-height: 1.6;">' . esc_html(__('To access both quotes and manage your account, please set a password using the link below.', 'cheapalarms')) . '</p>';
                     $body .= '</div>';
                 } else {
@@ -137,10 +137,10 @@ class EmailTemplateService
                     $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                     $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                     $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('We\'ve prepared a new quote for you!', 'cheapalarms')) . '</p>';
-                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                         __('Your new quote %s is ready for review. To access it, please set a password for your account using the link below.', 'cheapalarms'),
                         '<strong>' . esc_html($estimateNumber) . '</strong>'
-                    )) . '</p>';
+                    ) . '</p>';
                     $body .= '<p style="margin: 0 0 20px 0; line-height: 1.6;">' . esc_html(__('Once you\'ve set your password, you\'ll be able to view your quote and manage your account.', 'cheapalarms')) . '</p>';
                     $body .= '</div>';
                 }
@@ -174,11 +174,11 @@ class EmailTemplateService
                     $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('We\'ve prepared another quote for you!', 'cheapalarms')) . '</p>';
                     // Defensive check: ensure totalEstimateCount is at least 2 before showing count
                     $safeTotalCount = max(2, $totalEstimateCount);
-                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                         __('Your new quote %s is ready. This is your %s quote with us.', 'cheapalarms'),
                         '<strong>' . esc_html($estimateNumber) . '</strong>',
                         $safeTotalCount === 2 ? __('second', 'cheapalarms') : ($safeTotalCount === 3 ? __('third', 'cheapalarms') : sprintf(__('%dth', 'cheapalarms'), $safeTotalCount))
-                    )) . '</p>';
+                    ) . '</p>';
                     $body .= '<p style="margin: 0 0 20px 0; line-height: 1.6;">' . esc_html(__('To access all your quotes and manage your account, please set a password using the link below. You can also view this quote as a guest.', 'cheapalarms')) . '</p>';
                     $body .= '</div>';
                     $ctas = [];
@@ -204,11 +204,11 @@ class EmailTemplateService
                     $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('We\'ve prepared another quote for you!', 'cheapalarms')) . '</p>';
                     // Defensive check: ensure totalEstimateCount is at least 2 before showing count
                     $safeTotalCount = max(2, $totalEstimateCount);
-                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                    $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                         __('Your new quote %s is ready. This is your %s quote with us.', 'cheapalarms'),
                         '<strong>' . esc_html($estimateNumber) . '</strong>',
                         $safeTotalCount === 2 ? __('second', 'cheapalarms') : ($safeTotalCount === 3 ? __('third', 'cheapalarms') : sprintf(__('%dth', 'cheapalarms'), $safeTotalCount))
-                    )) . '</p>';
+                    ) . '</p>';
                     $body .= '<p style="margin: 0 0 20px 0; line-height: 1.6;">' . esc_html(__('You can view this quote and all your previous estimates in your portal.', 'cheapalarms')) . '</p>';
                     $body .= '</div>';
                     $ctas = [];
@@ -519,10 +519,10 @@ class EmailTemplateService
                 $body .= '<h2 style="font-size: 20px; font-weight: bold; color: #333333; margin: 0 0 20px 0; line-height: 1.4;">' . esc_html($subject) . '</h2>';
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('Your estimate %s is ready for review. Click the button below to view your estimate and manage your installation.', 'cheapalarms'),
                     $estimateNumber ? '<strong>#' . esc_html($estimateNumber) . '</strong>' : ''
-                )) . '</p>';
+                ) . '</p>';
                 $body .= '</div>';
                 $ctas = [];
                 if (!empty($portalUrl)) {
@@ -549,10 +549,10 @@ class EmailTemplateService
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                 $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('Great to have you back! Your estimate is ready for review.', 'cheapalarms')) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('Your estimate %s is ready. Click the button below to view and manage your installation.', 'cheapalarms'),
                     $estimateNumber ? '<strong>#' . esc_html($estimateNumber) . '</strong>' : ''
-                )) . '</p>';
+                ) . '</p>';
                 $body .= '</div>';
                 $ctas = [];
                 if (!empty($portalUrl)) {
@@ -576,10 +576,10 @@ class EmailTemplateService
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
                 $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('We\'ve prepared a new estimate for you!', 'cheapalarms')) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('Your estimate %s is ready. To access it, please set a password for your account.', 'cheapalarms'),
                     $estimateNumber ? '<strong>#' . esc_html($estimateNumber) . '</strong>' : ''
-                )) . '</p>';
+                ) . '</p>';
                 $body .= '</div>';
                 $ctas = [];
                 if (!empty($portalUrl)) {
@@ -655,10 +655,10 @@ class EmailTemplateService
                 $body .= '<h2 style="font-size: 20px; font-weight: bold; color: #333333; margin: 0 0 20px 0; line-height: 1.4;">' . esc_html($subject) . '</h2>';
                 $body .= '<div style="color: #333333; font-size: 16px; line-height: 1.6;">';
                 $body .= '<p style="margin: 0 0 15px 0; font-weight: 500;">' . esc_html(sprintf(__('Hi %s,', 'cheapalarms'), $customerName)) . '</p>';
-                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(sprintf(
+                $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . sprintf(
                     __('Thank you for accepting estimate %s! We\'re excited to move forward with your project.', 'cheapalarms'),
                     $estimateNumber ? '<strong>#' . esc_html($estimateNumber) . '</strong>' : ''
-                )) . '</p>';
+                ) . '</p>';
                 if (!empty($invoiceUrl)) {
                     $body .= '<p style="margin: 0 0 15px 0; line-height: 1.6;">' . esc_html(__('Your invoice has been created and is ready for payment:', 'cheapalarms')) . '</p>';
                 } else {
