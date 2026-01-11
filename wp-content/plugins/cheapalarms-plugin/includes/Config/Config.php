@@ -24,6 +24,7 @@ class Config
         'xero_bank_account_code' => '090',
         'stripe_publishable_key' => '',
         'stripe_secret_key'      => '',
+        'stripe_webhook_secret'  => '',
     ];
 
     private array $overrides = [];
@@ -215,6 +216,11 @@ class Config
     public function getStripeSecretKey(): string
     {
         return $this->fromOverrides('stripe_secret_key') ?: $this->getEnv('CA_STRIPE_SECRET_KEY', $this->defaults['stripe_secret_key']);
+    }
+
+    public function getStripeWebhookSecret(): string
+    {
+        return $this->fromOverrides('stripe_webhook_secret') ?: $this->getEnv('CA_STRIPE_WEBHOOK_SECRET', $this->defaults['stripe_webhook_secret']);
     }
 
     private function getEnv(string $key, $default = '')

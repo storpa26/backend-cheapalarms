@@ -322,6 +322,7 @@ class PortalService
             'isGuestMode'  => $isGuestMode,
             'daysRemaining' => $daysRemaining,
             'canCreateAccount' => $isGuestMode, // Guests can always create account
+            'canBook' => $this->canBook($estimateId), // Check if booking is available
         ];
     }
 
@@ -1750,6 +1751,7 @@ class PortalService
         
         // Build photos structure with actual data
         $photos = $meta['photos'] ?? [];
+        $quote = $meta['quote'] ?? [];
         $photos['total'] = count($uploads);
         $photos['uploaded'] = count($uploads);
         $photos['items'] = $uploads;
@@ -1757,41 +1759,55 @@ class PortalService
         $photos['submitted_at'] = current_time('mysql');
         $photos['last_edited_at'] = current_time('mysql');
         
-        // Update workflow status (NEW: Don't change if already 'sent' or 'under_review')
+        // Update workflow status and auto-request review
         $workflow = $meta['workflow'] ?? [];
         $currentWorkflowStatus = $workflow['status'] ?? 'requested';
         
-        // Only update workflow if still in 'requested' status
-        // If 'sent' or 'under_review', keep current status (workflow changes when review is requested)
-        if ($currentWorkflowStatus === 'requested') {
-            // Initialize workflow if it doesn't exist
-            if (empty($workflow) || !isset($workflow['status'])) {
-                $workflow = [
-                    'status' => 'sent', // NEW: Changed from 'reviewing' to 'sent'
-                    'currentStep' => 2,
-                    'requestedAt' => current_time('mysql'),
-                ];
-            } else {
-                // Update existing workflow
-                $workflow['status'] = 'sent'; // NEW: Changed from 'reviewing' to 'sent'
+        // Check if changes were requested (indicates resubmission after admin review)
+        $changesWereRequested = !empty($quote['change_requested_at']);
+        
+        // Auto-request review when photos are submitted (if not already requested)
+        // BUT: Don't auto-request if changes were requested (customer must manually request review)
+        $autoRequestReview = empty($quote['approval_requested']) && !$changesWereRequested;
+        
+        // If this is the first submission (not a resubmission), auto-request review
+        if ($autoRequestReview) {
+            $quote['approval_requested'] = true;
+            if ($currentWorkflowStatus === 'requested' || $currentWorkflowStatus === 'sent') {
+                $workflow['status'] = 'under_review';
                 $workflow['currentStep'] = 2;
-                
-                // Preserve requestedAt if it exists
-                if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
-                    $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+            }
+        } else {
+            // Resubmission after admin reviewed - keep workflow status as 'sent' (customer needs to request review)
+            // Only transition to 'under_review' if review was already requested
+            if ($currentWorkflowStatus === 'requested' || $currentWorkflowStatus === 'sent') {
+                if (!empty($quote['approval_requested'])) {
+                    $workflow['status'] = 'under_review';
+                    $workflow['currentStep'] = 2;
                 }
+                // If changes were requested and review not yet requested, stay in 'sent' status
             }
         }
-        // If already 'sent', 'under_review', or 'ready_to_accept', preserve current status
+        
+        // Preserve requestedAt if it exists
+        if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+            $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+        }
         
         // Update meta using updateMeta() for proper locking (not update_option directly)
         $this->updateMeta($estimateId, [
             'photos' => $photos,
             'workflow' => $workflow,
+            'quote' => $quote,
         ]);
         
         // Send notification to admin
-        $this->sendPhotoSubmissionNotificationToAdmin($estimateId, $locationId, $photos['total']);
+        // If auto-requested review, send review request notification instead of just photo submission
+        if ($autoRequestReview) {
+            $this->sendReviewRequestNotificationToAdmin($estimateId, $locationId, $quote, $photos);
+        } else {
+            $this->sendPhotoSubmissionNotificationToAdmin($estimateId, $locationId, $photos['total']);
+        }
         
         return [
             'ok' => true,
@@ -4843,6 +4859,178 @@ class PortalService
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Compute payment totals from payments array
+     * 
+     * @param array $payments Array of payment records
+     * @param float $invoiceTotal Total invoice amount
+     * @return array Computed totals
+     */
+    private function computePaymentTotals(array $payments, float $invoiceTotal): array
+    {
+        $totalPaid = 0;
+        $depositPaid = false;
+        $depositPaidAt = null;
+        
+        foreach ($payments as $p) {
+            if (($p['status'] ?? '') === 'succeeded' && !($p['refunded'] ?? false)) {
+                $totalPaid += (float) ($p['amount'] ?? 0);
+                
+                if (($p['paymentType'] ?? '') === 'deposit') {
+                    $depositPaid = true;
+                    $depositPaidAt = $depositPaidAt ?: ($p['paidAt'] ?? null);
+                }
+            }
+        }
+        
+        $remainingBalance = max(0, $invoiceTotal - $totalPaid);
+        $isFullyPaid = ($totalPaid >= $invoiceTotal);
+        
+        return [
+            'totalPaid' => $totalPaid,
+            'remainingBalance' => $remainingBalance,
+            'isFullyPaid' => $isFullyPaid,
+            'hasDepositPaid' => $depositPaid,
+            'depositPaidAt' => $depositPaidAt,
+            'status' => $isFullyPaid ? 'paid' : ($totalPaid > 0 ? 'partial' : 'pending'),
+        ];
+    }
+
+    /**
+     * Check if booking is available for estimate
+     * 
+     * Rules:
+     * - If depositRequired: booking allowed only if deposit paid AND not refunded
+     * - If no deposit: booking allowed if totalPaid > 0 (or your business rule)
+     * 
+     * @param string $estimateId
+     * @return bool
+     */
+    public function canBook(string $estimateId): bool
+    {
+        $meta = $this->getMeta($estimateId);
+        $payment = $meta['payment'] ?? [];
+        $invoice = $meta['invoice'] ?? [];
+        
+        $depositRequired = $invoice['depositRequired'] ?? false;
+        
+        if ($depositRequired) {
+            // Must have deposit paid and not refunded
+            $hasDepositPaid = $payment['hasDepositPaid'] ?? false;
+            if (!$hasDepositPaid) {
+                return false;
+            }
+            
+            // Check if deposit was refunded
+            $depositRefunded = $this->isDepositRefunded($payment);
+            if ($depositRefunded) {
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // If no deposit required, allow booking when any payment exists
+        $totalPaid = $payment['totalPaid'] ?? 0;
+        return $totalPaid > 0;
+    }
+
+    /**
+     * Check if deposit payment was refunded
+     * 
+     * @param array $payment Payment meta
+     * @return bool
+     */
+    private function isDepositRefunded(array $payment): bool
+    {
+        if (empty($payment['payments']) || !is_array($payment['payments'])) {
+            return false;
+        }
+        
+        foreach ($payment['payments'] as $p) {
+            if (($p['paymentType'] ?? '') === 'deposit') {
+                return ($p['refunded'] ?? false) === true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Reconcile payment state from Stripe (source of truth)
+     * 
+     * Use when:
+     * - Webhooks were down
+     * - Suspect drift
+     * - Admin needs "Fix payments state" button
+     */
+    public function reconcilePaymentState(string $estimateId): array|WP_Error
+    {
+        $meta = $this->getMeta($estimateId);
+        $payment = $meta['payment'] ?? [];
+        $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? 0;
+        
+        if ($invoiceTotal <= 0) {
+            return new WP_Error('no_invoice', __('No invoice found for reconciliation.', 'cheapalarms'), ['status' => 400]);
+        }
+        
+        $stripeService = $this->container->get(\CheapAlarms\Plugin\Services\StripeService::class);
+        $payments = $payment['payments'] ?? [];
+        
+        // Verify each payment intent with Stripe
+        $verifiedPayments = [];
+        
+        foreach ($payments as $p) {
+            $paymentIntentId = $p['paymentIntentId'] ?? null;
+            if (empty($paymentIntentId)) {
+                continue;
+            }
+            
+            $stripeResult = $stripeService->getPaymentIntent($paymentIntentId);
+            if (is_wp_error($stripeResult)) {
+                $this->logger->warning('Payment intent not found in Stripe during reconciliation', [
+                    'estimateId' => $estimateId,
+                    'paymentIntentId' => $paymentIntentId,
+                ]);
+                continue;
+            }
+            
+            $stripeStatus = $stripeResult['status'] ?? 'unknown';
+            $stripeAmount = $stripeResult['amount'] ?? 0;
+            
+            // Update payment record with Stripe status (source of truth)
+            $p['status'] = ($stripeStatus === 'succeeded') ? 'succeeded' : 'failed';
+            $p['amount'] = $stripeAmount; // Use Stripe amount
+            
+            $verifiedPayments[] = $p;
+        }
+        
+        // Recompute totals
+        $totals = $this->computePaymentTotals($verifiedPayments, $invoiceTotal);
+        
+        // Update portal meta
+        $this->updateMeta($estimateId, [
+            'payment' => array_merge($payment, [
+                'payments' => $verifiedPayments,
+                'totalPaid' => $totals['totalPaid'],
+                'remainingBalance' => $totals['remainingBalance'],
+                'isFullyPaid' => $totals['isFullyPaid'],
+                'hasDepositPaid' => $totals['hasDepositPaid'],
+                'depositPaidAt' => $totals['depositPaidAt'],
+                'status' => $totals['status'],
+                'reconciledAt' => current_time('mysql'),
+            ]),
+        ]);
+        
+        return [
+            'ok' => true,
+            'totalPaid' => $totals['totalPaid'],
+            'remainingBalance' => $totals['remainingBalance'],
+            'isFullyPaid' => $totals['isFullyPaid'],
+            'hasDepositPaid' => $totals['hasDepositPaid'],
+        ];
     }
 }
 

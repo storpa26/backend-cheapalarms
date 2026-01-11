@@ -179,6 +179,38 @@ class Plugin
             wp_schedule_single_event(time() + 1, 'ca_cleanup_expired_deletions');
         });
 
+        // Register webhook processing hooks
+        add_action('ca_process_stripe_webhook', function (string $eventId) {
+            $this->container->get(\CheapAlarms\Plugin\Services\StripeWebhookProcessor::class)
+                ->processEvent($eventId);
+        }, 10, 1);
+
+        // Retry failed webhooks (every 5 minutes)
+        add_action('ca_retry_failed_webhooks', function () {
+            $this->container->get(\CheapAlarms\Plugin\Services\WebhookRetryService::class)
+                ->retryPendingEvents();
+        }, 10, 0);
+
+        // Schedule retry job (every 5 minutes)
+        if (!wp_next_scheduled('ca_retry_failed_webhooks_recurring')) {
+            // Register custom schedule if needed
+            add_filter('cron_schedules', function ($schedules) {
+                if (!isset($schedules['ca_every_5_minutes'])) {
+                    $schedules['ca_every_5_minutes'] = [
+                        'interval' => 300, // 5 minutes
+                        'display' => __('Every 5 Minutes', 'cheapalarms'),
+                    ];
+                }
+                return $schedules;
+            });
+            
+            wp_schedule_event(time() + 300, 'ca_every_5_minutes', 'ca_retry_failed_webhooks_recurring');
+        }
+
+        add_action('ca_retry_failed_webhooks_recurring', function () {
+            wp_schedule_single_event(time() + 1, 'ca_retry_failed_webhooks');
+        });
+
         $this->registerCors();
         $this->registerRestEndpoints();
         $this->registerFrontend();
@@ -444,6 +476,27 @@ class Plugin
         $this->container->set(\CheapAlarms\Plugin\Services\EmailTemplateService::class, fn () => new \CheapAlarms\Plugin\Services\EmailTemplateService(
             $this->container->get(Config::class)
         ));
+        
+        // Webhook services
+        $this->container->set(\CheapAlarms\Plugin\Services\WebhookEventRepository::class, 
+            fn () => new \CheapAlarms\Plugin\Services\WebhookEventRepository()
+        );
+        
+        $this->container->set(\CheapAlarms\Plugin\Services\StripeWebhookProcessor::class, 
+            fn (Container $c) => new \CheapAlarms\Plugin\Services\StripeWebhookProcessor(
+                $c->get(\CheapAlarms\Plugin\Services\WebhookEventRepository::class),
+                $c->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class),
+                $c->get(Logger::class)
+            )
+        );
+        
+        $this->container->set(\CheapAlarms\Plugin\Services\WebhookRetryService::class, 
+            fn (Container $c) => new \CheapAlarms\Plugin\Services\WebhookRetryService(
+                $c->get(\CheapAlarms\Plugin\Services\WebhookEventRepository::class),
+                $c->get(\CheapAlarms\Plugin\Services\StripeWebhookProcessor::class),
+                $c->get(Logger::class)
+            )
+        );
     }
 
     private function registerRestEndpoints(): void

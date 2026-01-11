@@ -60,6 +60,21 @@ class PortalController implements ControllerInterface
             if (!empty($inviteToken)) {
                 return true; // invite links act as bearer tokens
             }
+            
+            // FIX: Ensure user is loaded (triggers JWT authentication if token exists)
+            // This fixes timing issues where JWT auth hasn't run yet
+            $this->auth->ensureUserLoaded();
+            $user = wp_get_current_user();
+            
+            // FIX: Skip nonce check if user is authenticated via JWT or cookie
+            // JWT/Bearer tokens don't need nonces (stateless authentication)
+            // WordPress Application Passwords also don't require nonces
+            // Nonces are only needed for cookie-based authentication to prevent CSRF
+            if ($user && $user->ID > 0) {
+                return true; // User authenticated via JWT/cookie - skip nonce check
+            }
+            
+            // Only require nonce for unauthenticated requests
             $nonce = $request->get_header('x-wp-nonce');
             if (empty($nonce)) {
                 return $this->respond(new WP_Error(

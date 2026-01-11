@@ -9,7 +9,7 @@ use function update_option;
 class Schema
 {
     public const OPTION_KEY = 'ca_db_schema_version';
-    public const VERSION    = '2025-12-30-01';
+    public const VERSION    = '2025-01-15-01'; // Updated for webhook events table
 
     public static function maybeMigrate(): void
     {
@@ -122,6 +122,29 @@ class Schema
                 error_log('Schema migration warning (index add): ' . $wpdb->last_error);
             }
         }
+
+        // Create webhook events table
+        $webhookTableName = $wpdb->prefix . 'ca_webhook_events';
+        $webhookSql = "CREATE TABLE IF NOT EXISTS {$webhookTableName} (
+            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            estimate_id VARCHAR(255) NOT NULL,
+            event_id VARCHAR(255) NOT NULL,
+            event_type VARCHAR(100) NOT NULL,
+            payload LONGTEXT NULL COMMENT 'Raw JSON payload for retry/replay',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processing_started_at DATETIME NULL COMMENT 'When processing started',
+            processed_at DATETIME NULL COMMENT 'NULL = pending, timestamp = processed',
+            retry_count INT UNSIGNED DEFAULT 0,
+            error_message TEXT NULL COMMENT 'Error if processing failed',
+            PRIMARY KEY (id),
+            UNIQUE KEY unique_event (event_id),
+            KEY idx_estimate_id (estimate_id),
+            KEY idx_event_type (event_type),
+            KEY idx_processed_at (processed_at),
+            KEY idx_pending (processed_at, processing_started_at) COMMENT 'Find pending/failed events'
+        ) {$charsetCollate};";
+        
+        dbDelta($webhookSql);
     }
 }
 

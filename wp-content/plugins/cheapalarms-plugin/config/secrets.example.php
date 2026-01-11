@@ -63,8 +63,9 @@ return [
     // Redirect URI should match your Next.js app URL + /xero/callback
     'xero_redirect_uri'  => 'https://headless-cheapalarms.vercel.app/xero/callback',
     
-    // Stripe Integration Credentials (Test Mode)
+    // Stripe Integration Credentials
     'stripe_publishable_key' => '', // or set CA_STRIPE_PUBLISHABLE_KEY env var
     'stripe_secret_key'      => '', // or set CA_STRIPE_SECRET_KEY env var
+    'stripe_webhook_secret'  => '', // or set CA_STRIPE_WEBHOOK_SECRET env var (from Stripe Dashboard → Webhooks → Signing secret)
 ];
 

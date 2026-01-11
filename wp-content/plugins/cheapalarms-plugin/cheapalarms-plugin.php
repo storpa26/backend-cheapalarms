@@ -15,6 +15,12 @@ define('CA_PLUGIN_VERSION', '2.0.0');
 
 require_once CA_PLUGIN_PATH . 'autoload.php';
 
+// Add Composer autoloader if vendor/ exists (for Stripe PHP library)
+$composerAutoload = CA_PLUGIN_PATH . 'vendor/autoload.php';
+if (file_exists($composerAutoload)) {
+    require_once $composerAutoload;
+}
+
 use CheapAlarms\Plugin\Plugin;
 
 Plugin::instance()->boot();

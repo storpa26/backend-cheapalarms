@@ -42,6 +42,7 @@ This plugin is **pre-configured** and ready for deployment!
 ✅ **JWT Secret** - Updated for production  
 ✅ **CORS** - Localhost URLs preserved for local dev  
 ✅ **File Upload Limits** - 10MB max  
+✅ **Stripe Payment Integration** - See STRIPE-PAYMENT-SETUP.md  
 
 ---
 
@@ -49,9 +50,11 @@ This plugin is **pre-configured** and ready for deployment!
 
 ### **Plesk WordPress:**
 - [ ] Install fresh WordPress via Plesk WordPress Toolkit
-- [ ] Upload this plugin (ZIP it first)
+- [ ] Install Composer dependencies: `composer install --no-dev` (see STRIPE-PAYMENT-SETUP.md)
+- [ ] Upload this plugin (ZIP it first, include `vendor/` directory)
 - [ ] Activate plugin via WP Admin
 - [ ] Set Permalinks to "Post name" (Settings → Permalinks)
+- [ ] Configure Stripe API keys (see STRIPE-PAYMENT-SETUP.md)
 - [ ] Test API: `https://yourdomain.com/wp-json/ca/v1/health`
 
 ### **After Vercel Deployment:**
@@ -121,6 +124,12 @@ GET https://yourdomain.com/wp-json/ca/v1/estimate?estimateId=test
 **Security:**
 - Upload Secret: Configured
 - JWT Secret: Updated for production
+
+**Stripe Integration:**
+- Secret Key: Configure in `secrets.php` or `CA_STRIPE_SECRET_KEY`
+- Publishable Key: Configure in `secrets.php` or `CA_STRIPE_PUBLISHABLE_KEY`
+- Webhook Secret: Configure in `secrets.php` or `CA_STRIPE_WEBHOOK_SECRET`
+- See STRIPE-PAYMENT-SETUP.md for complete setup instructions
 
 ---
 

@@ -316,6 +316,21 @@ class Authenticator
             return $error;
         }
 
+        // FIX: Check if JWT authentication succeeded
+        // If a JWT token exists and user is logged in, return true to signal success
+        // This prevents WordPress core's rest_cookie_check_errors from running
+        // (which requires nonces for cookie-based auth)
+        $token = $this->getBearerToken();
+        if ($token) {
+            // JWT token exists - check if authentication succeeded
+            $this->ensureUserLoaded(); // Trigger determineCurrentUser if needed
+            $user = wp_get_current_user();
+            if ($user && $user->ID > 0) {
+                // JWT authentication succeeded - return true to skip cookie auth
+                return true;
+            }
+        }
+
         return $result;
     }
 

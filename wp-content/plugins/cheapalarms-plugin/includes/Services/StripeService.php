@@ -30,9 +30,10 @@ class StripeService
      * @param float $amount Payment amount in cents (or smallest currency unit)
      * @param string $currency Currency code (default: 'aud')
      * @param array $metadata Additional metadata to attach
+     * @param string|null $idempotencyKey Optional idempotency key for safe retries
      * @return array|WP_Error
      */
-    public function createPaymentIntent(float $amount, string $currency = 'aud', array $metadata = [])
+    public function createPaymentIntent(float $amount, string $currency = 'aud', array $metadata = [], ?string $idempotencyKey = null)
     {
         $secretKey = $this->config->getStripeSecretKey();
         
@@ -60,12 +61,20 @@ class StripeService
             }
         }
 
+        // Build headers
+        $headers = [
+            'Authorization' => 'Bearer ' . $secretKey,
+            'Content-Type' => 'application/x-www-form-urlencoded',
+        ];
+        
+        // FIXED: Add idempotency key header if provided
+        if (!empty($idempotencyKey)) {
+            $headers['Idempotency-Key'] = $idempotencyKey;
+        }
+        
         // Use http_build_query for proper form encoding
         $response = wp_remote_post(self::STRIPE_API_BASE . '/payment_intents', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $secretKey,
-                'Content-Type' => 'application/x-www-form-urlencoded',
-            ],
+            'headers' => $headers,
             'body' => http_build_query($bodyParams),
             'timeout' => 30,
         ]);

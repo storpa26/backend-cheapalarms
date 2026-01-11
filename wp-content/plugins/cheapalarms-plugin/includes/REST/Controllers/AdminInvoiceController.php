@@ -53,7 +53,7 @@ class AdminInvoiceController extends AdminController
             },
         ]);
 
-        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)', [
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[\w-]+)', [
             'methods'             => 'GET',
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
@@ -72,7 +72,7 @@ class AdminInvoiceController extends AdminController
             ],
         ]);
 
-        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/sync', [
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[\w-]+)/sync', [
             'methods'             => 'POST',
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
@@ -91,7 +91,7 @@ class AdminInvoiceController extends AdminController
             ],
         ]);
 
-        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/delete', [
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[\w-]+)/delete', [
             'methods'             => 'POST',
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
@@ -110,7 +110,7 @@ class AdminInvoiceController extends AdminController
             ],
         ]);
 
-        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[a-zA-Z0-9]+)/send', [
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[\w-]+)/send', [
             'methods'             => 'POST',
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
@@ -125,6 +125,27 @@ class AdminInvoiceController extends AdminController
                 'invoiceId' => [
                     'required' => true,
                     'type'     => 'string',
+                ],
+            ],
+        ]);
+
+        // Configure deposit requirement for invoice
+        register_rest_route('ca/v1', '/admin/invoices/(?P<invoiceId>[\w-]+)/configure-deposit', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->configureDeposit($request);
+            },
+            'args'                => [
+                'invoiceId' => [
+                    'required' => true,
+                    'type'     => 'string',
+                    'validate_callback' => fn ($param) => !empty($param) && preg_match('/^[\w-]+$/', $param),
                 ],
             ],
         ]);
@@ -680,6 +701,83 @@ class AdminInvoiceController extends AdminController
             'alreadyDeleted' => false,
             'linkedEstimateId' => $linkedEstimateId,
         ];
+    }
+
+    /**
+     * Configure deposit requirement for invoice
+     * 
+     * Route: POST /ca/v1/admin/invoices/{invoiceId}/configure-deposit
+     */
+    public function configureDeposit(WP_REST_Request $request): WP_REST_Response
+    {
+        $invoiceId = sanitize_text_field($request->get_param('invoiceId'));
+        $body = $request->get_json_params() ?? [];
+        
+        // FIXED: Route regex allows hyphens (UUIDs)
+        if (empty($invoiceId) || !preg_match('/^[\w-]+$/', $invoiceId)) {
+            return $this->respond(new WP_Error('bad_request', __('Invalid invoice ID.', 'cheapalarms'), ['status' => 400]));
+        }
+        
+        $depositRequired = isset($body['depositRequired']) ? (bool)$body['depositRequired'] : false;
+        $depositAmount = isset($body['depositAmount']) ? (float)$body['depositAmount'] : null;
+        $depositType = sanitize_text_field($body['depositType'] ?? 'fixed');
+        
+        // Validate deposit type
+        if ($depositType !== 'fixed' && $depositType !== 'percentage') {
+            return $this->respond(new WP_Error('bad_request', __('depositType must be "fixed" or "percentage".', 'cheapalarms'), ['status' => 400]));
+        }
+        
+        // Find linked estimate
+        $estimateId = $this->findEstimateIdByInvoiceId($invoiceId);
+        
+        if (empty($estimateId)) {
+            return $this->respond(new WP_Error('not_found', __('Estimate not found for this invoice.', 'cheapalarms'), ['status' => 404]));
+        }
+        
+        // Get portal meta
+        $meta = $this->getPortalMeta($estimateId);
+        $invoiceMeta = $meta['invoice'] ?? [];
+        
+        // Get invoice from service to get total if not in meta
+        $invoice = $this->invoiceService->getInvoice($invoiceId, '');
+        $invoiceTotal = 0;
+        if (!is_wp_error($invoice)) {
+            $invoiceTotal = $invoice['total'] ?? 0;
+        }
+        
+        // Calculate deposit amount if percentage (store as fixed value)
+        if ($depositRequired && $depositType === 'percentage' && $depositAmount !== null) {
+            $invoiceTotal = $invoiceMeta['total'] ?? $invoiceMeta['ghl']['total'] ?? $invoiceTotal;
+            if ($invoiceTotal <= 0) {
+                return $this->respond(new WP_Error('bad_request', __('Invoice total must be greater than zero to calculate percentage deposit.', 'cheapalarms'), ['status' => 400]));
+            }
+            $depositAmount = ($invoiceTotal * $depositAmount) / 100;
+        }
+        
+        // Validate deposit amount
+        if ($depositRequired && ($depositAmount === null || $depositAmount <= 0)) {
+            return $this->respond(new WP_Error('bad_request', __('Deposit amount must be greater than zero.', 'cheapalarms'), ['status' => 400]));
+        }
+        
+        // Update invoice meta
+        $invoiceUpdate = array_merge($invoiceMeta, [
+            'depositRequired' => $depositRequired,
+            'depositAmount' => $depositRequired ? $depositAmount : null,
+            'depositType' => $depositRequired ? $depositType : null,
+        ]);
+        
+        $this->updatePortalMeta($estimateId, [
+            'invoice' => $invoiceUpdate,
+        ]);
+        
+        return $this->respond([
+            'ok' => true,
+            'invoiceId' => $invoiceId,
+            'estimateId' => $estimateId,
+            'depositRequired' => $depositRequired,
+            'depositAmount' => $depositAmount,
+            'depositType' => $depositType,
+        ]);
     }
 
 }

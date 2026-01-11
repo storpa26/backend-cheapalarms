@@ -16,6 +16,7 @@ use function get_transient;
 use function is_wp_error;
 use function sanitize_text_field;
 use function set_transient;
+use function wp_schedule_single_event;
 
 class StripeController extends AdminController
 {
@@ -43,6 +44,13 @@ class StripeController extends AdminController
             'methods' => 'POST',
             'permission_callback' => fn () => $this->requirePortalOrAdmin(),
             'callback' => fn (WP_REST_Request $request) => $this->confirmPaymentIntent($request),
+        ]);
+
+        // Handle Stripe webhook events
+        register_rest_route('ca/v1', '/stripe/webhook', [
+            'methods' => 'POST',
+            'permission_callback' => '__return_true', // Public (verified by signature)
+            'callback' => fn (WP_REST_Request $request) => $this->handleWebhook($request),
         ]);
     }
 
@@ -78,7 +86,7 @@ class StripeController extends AdminController
             ));
         }
 
-        if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+        if (!preg_match('/^[\w-]+$/', $estimateId)) {
             return $this->respond(new WP_Error(
                 'invalid_estimate_id',
                 __('Invalid estimateId format.', 'cheapalarms'),
@@ -202,11 +210,51 @@ class StripeController extends AdminController
         set_transient($lockKey, time(), 5);
 
         try {
-            // Create payment intent with validated amount
-            // Include estimateId in metadata for tracking
-            $result = $this->stripeService->createPaymentIntent($amount, $currency, array_merge($metadata, [
-                'estimateId' => $estimateId,
-            ]));
+            // FIXED: Generate stable idempotency key (no time() - defeats idempotency)
+            // Format: pi_{estimateId}_{amountFixed2}_{currency}_{revisionNumber}
+            $revisionNumber = $meta['quote']['revisionNumber'] ?? 0;
+            $idempotencyKey = sprintf(
+                'pi_%s_%s_%s_%d',
+                $estimateId,
+                number_format($amount, 2, '.', ''), // Stable decimal format (e.g., "500.00")
+                strtolower($currency),
+                $revisionNumber
+            );
+
+            // Check for existing payment intent with same parameters
+            $existingIntentId = $meta['payment']['paymentIntentId'] ?? null;
+            $existingAmount = $meta['payment']['amount'] ?? null;
+            $existingCurrency = $meta['payment']['currency'] ?? 'aud';
+
+            // Reuse existing payment intent if amount, currency, and revision match
+            if ($existingIntentId && 
+                $existingAmount === $amount && 
+                $existingCurrency === $currency &&
+                ($meta['quote']['revisionNumber'] ?? 0) === $revisionNumber) {
+                
+                $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
+                if ($expiresAt && time() < (int)$expiresAt) {
+                    delete_transient($lockKey);
+                    return $this->respond([
+                        'ok' => true,
+                        'clientSecret' => null,
+                        'paymentIntentId' => $existingIntentId,
+                        'amount' => $amount,
+                        'currency' => $currency,
+                        'reused' => true,
+                    ]);
+                }
+            }
+
+            // ALWAYS include estimateId in metadata (required for webhook processing)
+            $paymentMetadata = array_merge($metadata, [
+                'estimateId' => $estimateId, // REQUIRED - never omit
+                'invoiceId' => $meta['invoice']['ghl']['id'] ?? $meta['invoice']['id'] ?? '',
+                'revisionNumber' => (string)$revisionNumber,
+            ]);
+
+            // Create payment intent with stable idempotency key
+            $result = $this->stripeService->createPaymentIntent($amount, $currency, $paymentMetadata, $idempotencyKey);
 
             if (is_wp_error($result)) {
                 delete_transient($lockKey);
@@ -269,7 +317,7 @@ class StripeController extends AdminController
         }
 
         // Validate estimateId format
-        if (!preg_match('/^[a-zA-Z0-9]+$/', $estimateId)) {
+        if (!preg_match('/^[\w-]+$/', $estimateId)) {
             return $this->respond(new WP_Error(
                 'invalid_estimate_id',
                 __('Invalid estimateId format.', 'cheapalarms'),
@@ -354,6 +402,7 @@ class StripeController extends AdminController
         // SECURITY: Validate payment intent amount against stored/invoice amount
         // This prevents confirming payment intents with manipulated amounts
         $paymentIntentAmount = $result['amount'] ?? 0; // Already converted from cents in StripeService
+        $currency = $result['currency'] ?? 'aud';
         
         if ($storedAmount !== null) {
             // Validate against stored amount (tolerance for floating point precision)
@@ -397,7 +446,264 @@ class StripeController extends AdminController
             }
         }
 
+        // Update payment records in portal meta
+        $payment = $meta['payment'] ?? [];
+        $payments = $payment['payments'] ?? [];
+        
+        // Check for duplicate payment (idempotency)
+        $isDuplicate = false;
+        $paymentRecord = null;
+
+        foreach ($payments as $existingPayment) {
+            if (($existingPayment['paymentIntentId'] ?? '') === $paymentIntentId) {
+                // Payment already recorded - return existing record
+                $isDuplicate = true;
+                $paymentRecord = $existingPayment;
+                break;
+            }
+        }
+
+        if (!$isDuplicate) {
+            // Determine payment type
+            $invoice = $meta['invoice'] ?? [];
+            $depositRequired = $invoice['depositRequired'] ?? false;
+            $hasDepositPaid = $payment['hasDepositPaid'] ?? false;
+            $paymentType = ($depositRequired && !$hasDepositPaid) ? 'deposit' : 'final';
+            
+            // Create new payment record
+            $paymentRecord = [
+                'paymentIntentId' => $paymentIntentId,
+                'amount' => $paymentIntentAmount,
+                'currency' => $currency,
+                'paymentType' => $paymentType,
+                'status' => 'succeeded',
+                'stripeEventId' => null, // Will be set when webhook arrives
+                'paidAt' => current_time('mysql'),
+                'refunded' => false,
+                'refundedAt' => null,
+                'refundAmount' => null,
+            ];
+            
+            $payments[] = $paymentRecord;
+        }
+
+        // Compute totals using helper method
+        $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? $invoiceTotal ?? 0;
+        $totals = $this->computePaymentTotals($payments, $invoiceTotal);
+
+        // Update payment meta
+        $paymentUpdate = [
+            'payment' => array_merge($payment, [
+                'payments' => $payments,
+                'totalPaid' => $totals['totalPaid'],
+                'remainingBalance' => $totals['remainingBalance'],
+                'isFullyPaid' => $totals['isFullyPaid'],
+                'hasDepositPaid' => $totals['hasDepositPaid'],
+                'depositPaidAt' => $totals['depositPaidAt'],
+                'status' => $totals['status'],
+                // Backward compatibility
+                'paymentIntentId' => $paymentIntentId,
+                'amount' => $paymentIntentAmount,
+                'invoiceTotal' => $invoiceTotal,
+            ]),
+        ];
+
+        $portalMetaRepo->merge($estimateId, $paymentUpdate);
+
         return $this->respond($result);
+    }
+
+    /**
+     * Compute payment totals from payments array
+     * 
+     * @param array $payments Array of payment records
+     * @param float $invoiceTotal Total invoice amount
+     * @return array Computed totals
+     */
+    private function computePaymentTotals(array $payments, float $invoiceTotal): array
+    {
+        $totalPaid = 0;
+        $depositPaid = false;
+        $depositPaidAt = null;
+        
+        foreach ($payments as $p) {
+            if (($p['status'] ?? '') === 'succeeded' && !($p['refunded'] ?? false)) {
+                $totalPaid += (float) ($p['amount'] ?? 0);
+                if (($p['paymentType'] ?? '') === 'deposit') {
+                    $depositPaid = true;
+                    $depositPaidAt = $depositPaidAt ?: ($p['paidAt'] ?? null);
+                }
+            }
+        }
+        
+        $remainingBalance = max(0, $invoiceTotal - $totalPaid);
+        $isFullyPaid = ($totalPaid >= $invoiceTotal);
+        
+        return [
+            'totalPaid' => $totalPaid,
+            'remainingBalance' => $remainingBalance,
+            'isFullyPaid' => $isFullyPaid,
+            'hasDepositPaid' => $depositPaid,
+            'depositPaidAt' => $depositPaidAt,
+            'status' => $isFullyPaid ? 'paid' : ($totalPaid > 0 ? 'partial' : 'pending'),
+        ];
+    }
+
+    /**
+     * Handle Stripe webhook events
+     * 
+     * FIXED: Return 200 fast, process async via WP-Cron
+     * This prevents Stripe timeouts and retries
+     * 
+     * Route: POST /ca/v1/stripe/webhook
+     */
+    public function handleWebhook(WP_REST_Request $request): WP_REST_Response
+    {
+        // Read raw body (don't use get_json_params - need raw for signature)
+        $payload = $request->get_body();
+        $signature = $request->get_header('Stripe-Signature');
+        
+        if (empty($payload) || empty($signature)) {
+            return $this->respond(new WP_Error(
+                'bad_request',
+                __('Missing webhook payload or signature.', 'cheapalarms'),
+                ['status' => 400]
+            ));
+        }
+        
+        // Verify webhook signature FIRST (must be fast)
+        $config = $this->container->get(\CheapAlarms\Plugin\Config\Config::class);
+        $webhookSecret = $config->getStripeWebhookSecret();
+        if (empty($webhookSecret)) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->error('Stripe webhook secret not configured');
+            return $this->respond(new WP_Error(
+                'configuration_error',
+                __('Webhook secret not configured.', 'cheapalarms'),
+                ['status' => 500]
+            ));
+        }
+        
+        // FIXED: Use Stripe library for signature verification
+        $isValid = $this->verifyWebhookSignature($payload, $signature, $webhookSecret);
+        if (!$isValid) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->warning('Invalid webhook signature');
+            return $this->respond(new WP_Error(
+                'invalid_signature',
+                __('Invalid webhook signature.', 'cheapalarms'),
+                ['status' => 401]
+            ));
+        }
+        
+        // Parse event (must be fast)
+        $event = json_decode($payload, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return $this->respond(new WP_Error(
+                'parse_error',
+                __('Failed to parse webhook payload.', 'cheapalarms'),
+                ['status' => 400]
+            ));
+        }
+        
+        $eventId = $event['id'] ?? null;
+        $eventType = $event['type'] ?? null;
+        $eventData = $event['data']['object'] ?? [];
+        
+        if (empty($eventId) || empty($eventType)) {
+            return $this->respond(new WP_Error(
+                'invalid_event',
+                __('Invalid webhook event structure.', 'cheapalarms'),
+                ['status' => 400]
+            ));
+        }
+        
+        // FIXED: Get estimateId from metadata (required, fail if missing)
+        // NEVER scan WP options - always require metadata
+        $estimateId = $eventData['metadata']['estimateId'] ?? null;
+        
+        if (empty($estimateId)) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->error('Webhook event missing estimateId in metadata', [
+                'eventId' => $eventId,
+                'eventType' => $eventType,
+                'paymentIntentId' => $eventData['id'] ?? null,
+            ]);
+            
+            return $this->respond(new WP_Error(
+                'missing_estimate_id',
+                __('Webhook event missing estimateId in metadata. Payment intent must include estimateId in metadata.', 'cheapalarms'),
+                ['status' => 400]
+            ));
+        }
+        
+        // FIXED: Store event BEFORE processing (safe retries)
+        $webhookEventRepo = $this->container->get(\CheapAlarms\Plugin\Services\WebhookEventRepository::class);
+        
+        // Check if already processed
+        if ($webhookEventRepo->isProcessed($eventId)) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->info('Webhook event already processed (idempotency)', [
+                'eventId' => $eventId,
+                'estimateId' => $estimateId,
+            ]);
+            return $this->respond([
+                'ok' => true,
+                'eventId' => $eventId,
+                'alreadyProcessed' => true,
+            ]);
+        }
+        
+        // Store event (idempotent - INSERT IGNORE)
+        $isNewEvent = $webhookEventRepo->storeEvent($estimateId, $eventId, $eventType, $payload);
+        
+        // FIXED: Schedule async processing via WP-Cron (return 200 fast)
+        // This prevents Stripe timeouts and retries
+        wp_schedule_single_event(time() + 1, 'ca_process_stripe_webhook', [$eventId]);
+        
+        // Return 200 immediately (event stored, will be processed async)
+        $response = $this->respond([
+            'ok' => true,
+            'eventId' => $eventId,
+            'eventType' => $eventType,
+            'queued' => true,
+            'message' => __('Webhook event received and queued for processing.', 'cheapalarms'),
+        ]);
+        $response->set_status(200);
+        return $response;
+    }
+
+    /**
+     * FIXED: Use Stripe library for signature verification
+     * Handles timestamp tolerance and multiple signatures automatically
+     */
+    private function verifyWebhookSignature(string $payload, string $signature, string $secret): bool
+    {
+        // Check if Stripe library is available
+        if (!class_exists('\Stripe\Webhook')) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->error('Stripe PHP library not available. Install via: composer require stripe/stripe-php');
+            return false;
+        }
+        
+        try {
+            // Use Stripe's official verification method
+            // Handles timestamp tolerance (default 5 minutes) and multiple signatures
+            $event = \Stripe\Webhook::constructEvent($payload, $signature, $secret);
+            return true;
+        } catch (\Stripe\Exception\SignatureVerificationException $e) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->warning('Webhook signature verification failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        } catch (\Exception $e) {
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->error('Webhook verification error', [
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 }
 
