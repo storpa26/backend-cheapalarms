@@ -208,7 +208,47 @@ class QuoteRequestController implements ControllerInterface
             // Use effective location ID
             $effectiveLocationId = $locationId ?: $this->config->getLocationId();
             
-            // Step 1: Create contact in GHL
+            // CRITICAL: Check if user is truly new BEFORE creating contact
+            // A user is truly new if email doesn't exist in BOTH WordPress AND GHL
+            $wpUserId = email_exists($email);
+            $isTrulyNewUser = !$wpUserId;
+            $existingGhlContactId = null;
+            $contactId = null; // Initialize to ensure it's always defined
+            
+            // If not in WordPress, check GHL before creating contact
+            if ($isTrulyNewUser) {
+                // Search GHL for existing contact by email
+                // CRITICAL: locationId should be ONLY in header, NOT in query params
+                $ghlSearchResult = $this->ghlClient->get('/contacts/search', [
+                    'query' => $email,
+                ], 8, $effectiveLocationId);
+                
+                if (!is_wp_error($ghlSearchResult)) {
+                    $contacts = $ghlSearchResult['contacts'] ?? $ghlSearchResult['items'] ?? [];
+                    foreach ($contacts as $contact) {
+                        $contactEmail = $contact['email'] ?? '';
+                        if ($contactEmail && strcasecmp($contactEmail, $email) === 0) {
+                            // Contact exists in GHL - not a new user
+                            $isTrulyNewUser = false;
+                            $existingGhlContactId = $contact['id'] ?? null;
+                            error_log('[CheapAlarms][INFO] Found existing GHL contact for email: ' . $email . ' (contactId: ' . ($existingGhlContactId ?: 'null') . ')');
+                            break;
+                        }
+                    }
+                } else {
+                    // Search failed - log but continue (will try to create contact)
+                    error_log('[CheapAlarms][WARNING] GHL contact search failed before contact creation: ' . $ghlSearchResult->get_error_message());
+                }
+            } else {
+                error_log('[CheapAlarms][INFO] Email exists in WordPress (userId: ' . $wpUserId . ') - not a new user');
+            }
+            
+            // Log truly new user status
+            if ($isTrulyNewUser) {
+                error_log('[CheapAlarms][INFO] User is TRULY NEW - email not found in WordPress or GHL: ' . $email);
+            }
+            
+            // Step 1: Create contact in GHL (or use existing if found)
             $contactPayload = [
                 'firstName' => $firstName,
                 'lastName' => $lastName,
@@ -225,10 +265,16 @@ class QuoteRequestController implements ControllerInterface
                 $contactPayload['country'] = $address['country'] ?? 'AU';
             }
 
-            // Use shorter timeout for contact creation to keep UX snappy on submit
-            $contactResult = $this->ghlClient->post('/contacts/', $contactPayload, 8, $effectiveLocationId);
-            
-            if (is_wp_error($contactResult)) {
+            // Use existing contactId if we found one, otherwise create new contact
+            if ($existingGhlContactId) {
+                // Use existing contact - no need to create
+                $contactId = $existingGhlContactId;
+                error_log('[CheapAlarms][INFO] Using existing GHL contact: ' . $contactId);
+            } else {
+                // Create new contact in GHL
+                $contactResult = $this->ghlClient->post('/contacts/', $contactPayload, 8, $effectiveLocationId);
+                
+                if (is_wp_error($contactResult)) {
                 // Handle duplicate contact errors safely:
                 // - If duplicate is by EMAIL, reuse existing contactId (safe).
                 // - If duplicate is by PHONE, DO NOT auto-merge (unsafe); return a friendly conflict.
@@ -264,6 +310,9 @@ class QuoteRequestController implements ControllerInterface
                     // If GHL indicates email-based duplication, it's safe to reuse.
                     if (!empty($contactId) && is_string($matchingField) && strtolower($matchingField) === 'email') {
                         // safe path: reuse $contactId
+                        // Contact exists in GHL - user is not truly new
+                        $isTrulyNewUser = false;
+                        error_log('[CheapAlarms][INFO] Contact duplicate by email detected - user is not new (contactId: ' . $contactId . ')');
                     } elseif (!empty($contactId) && empty($matchingField)) {
                         // Defensive: if matchingField is missing, verify by searching contacts by email (fast, no retry).
                         // Fail CLOSED: if we cannot confirm it's an email-duplicate, we return a friendly conflict.
@@ -271,8 +320,8 @@ class QuoteRequestController implements ControllerInterface
                         $foundByEmail = false;
                         $contactIdFromSearch = null;
                         try {
+                            // CRITICAL: locationId should be ONLY in header, NOT in query params
                             $search = $this->ghlClient->get('/contacts/search', [
-                                'locationId' => $effectiveLocationId,
                                 'query' => $email,
                             ], 5, $effectiveLocationId, 0);
 
@@ -311,6 +360,9 @@ class QuoteRequestController implements ControllerInterface
 
                         if (!empty($contactIdFromSearch)) {
                             $contactId = $contactIdFromSearch;
+                            // Contact found by email search - user is not truly new
+                            $isTrulyNewUser = false;
+                            error_log('[CheapAlarms][INFO] Contact found by email search - user is not new (contactId: ' . $contactId . ')');
                         }
                     } elseif (!empty($contactId) && is_string($matchingField) && $matchingField !== '') {
                         // Unknown matching field - treat as conflict to avoid wrong merge.
@@ -321,21 +373,42 @@ class QuoteRequestController implements ControllerInterface
                         ], 409);
                     }
                 }
-
-                if (empty($contactId)) {
-                    return new WP_REST_Response([
-                        'ok' => false,
-                        'error' => 'Failed to create contact: ' . $contactResult->get_error_message(),
-                    ], 500);
-                }
             } else {
+                // Contact creation succeeded
                 $contactId = $contactResult['contact']['id'] ?? null;
+                if ($contactId) {
+                    if ($isTrulyNewUser) {
+                        error_log('[CheapAlarms][INFO] Created new GHL contact: ' . $contactId);
+                    } else {
+                        error_log('[CheapAlarms][INFO] GHL contact created (but user was not truly new): ' . $contactId);
+                    }
+                }
             }
-            
-            if (!$contactId) {
+            }
+
+            // Check if contactId is empty AFTER error handling (outside if/else block)
+            if (empty($contactId)) {
+                $errorMessage = 'Contact ID missing';
+                if (isset($contactResult)) {
+                    if ($contactResult instanceof WP_Error) {
+                        $errorMessage = 'Failed to create contact: ' . $contactResult->get_error_message();
+                    } elseif (is_array($contactResult) && isset($contactResult['contact']['id'])) {
+                        // Contact was created but ID extraction failed
+                        $errorMessage = 'Contact created but ID extraction failed';
+                    }
+                } elseif ($existingGhlContactId) {
+                    // This shouldn't happen, but defensive check
+                    $errorMessage = 'Existing contact ID was set but contactId is empty';
+                }
+                error_log('[CheapAlarms][ERROR] contactId is empty after contact creation: ' . wp_json_encode([
+                    'email' => $email,
+                    'existingGhlContactId' => $existingGhlContactId,
+                    'hasContactResult' => isset($contactResult),
+                    'contactResultType' => isset($contactResult) ? gettype($contactResult) : 'not set',
+                ]));
                 return new WP_REST_Response([
                     'ok' => false,
-                    'error' => 'Contact created but ID missing',
+                    'error' => $errorMessage,
                 ], 500);
             }
 
@@ -503,8 +576,30 @@ class QuoteRequestController implements ControllerInterface
             if ($userId && $userId > 0) {
                 clean_user_cache($userId);
                 wp_cache_delete($userId, 'user_meta'); // Clear user meta cache specifically
+                
+                // If user is truly new (doesn't exist in GHL), clear stale password metadata
+                // This prevents false "has password" detection from previous tests
+                if ($isTrulyNewUser) {
+                    delete_user_meta($userId, 'ca_password_set_at');
+                    delete_user_meta($userId, 'ca_last_login');
+                    error_log('[CheapAlarms][INFO] Cleared stale password metadata for truly new user: ' . $email);
+                }
             }
             $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email, $estimateId);
+            
+            // CRITICAL: Override user context if user is truly new
+            // Force variation 'A' regardless of any stale metadata
+            if ($isTrulyNewUser) {
+                $userContext['isNewUser'] = true;
+                $userContext['hasPasswordSet'] = false;
+                $userContext['hasPreviousEstimates'] = false;
+                $userContext['estimateCount'] = 0;
+                error_log('[CheapAlarms][INFO] Forced user context to new user (truly new - not in WordPress or GHL): ' . wp_json_encode([
+                    'email' => $email,
+                    'userId' => $userId,
+                    'contactId' => $contactId,
+                ]));
+            }
 
             // Attach estimate to user if user exists
             if ($userId) {
@@ -530,26 +625,67 @@ class QuoteRequestController implements ControllerInterface
             }
 
             // Generate password reset key for new users (pointing to Next.js frontend)
+            // CRITICAL: This resetUrl is essential for users to set their password
+            // Must always be generated when userId exists, with proper error logging
             $resetUrl = null;
-            if ($userId) {
+            if ($userId && $userId > 0) {
                 $user = get_user_by('id', $userId);
-                if ($user) {
+                if (!$user) {
+                    error_log('[CheapAlarms][ERROR] Failed to retrieve user object for resetUrl generation: ' . wp_json_encode([
+                        'userId' => $userId,
+                        'email' => $email,
+                        'estimateId' => $estimateId,
+                    ]));
+                } else {
                     $key = get_password_reset_key($user);
-                    if (!is_wp_error($key)) {
+                    if (is_wp_error($key)) {
+                        error_log('[CheapAlarms][ERROR] Failed to generate password reset key: ' . wp_json_encode([
+                            'userId' => $userId,
+                            'email' => $email,
+                            'estimateId' => $estimateId,
+                            'error' => $key->get_error_message(),
+                            'errorCode' => $key->get_error_code(),
+                            'userLogin' => $user->user_login,
+                        ]));
+                    } else {
                         $frontendUrl = $this->config->getFrontendUrl();
-                        $resetUrl = add_query_arg(
-                            [
-                                'key' => $key,
-                                'login' => rawurlencode($user->user_login),
+                        if (empty($frontendUrl)) {
+                            error_log('[CheapAlarms][ERROR] Frontend URL is not configured - cannot generate resetUrl: ' . wp_json_encode([
+                                'userId' => $userId,
+                                'email' => $email,
                                 'estimateId' => $estimateId,
-                            ],
-                            trailingslashit($frontendUrl) . 'set-password'
-                        );
-                        
-                        // Add reset URL to portal meta
-                        $portalMeta['account']['resetUrl'] = $resetUrl;
+                            ]));
+                        } else {
+                            $resetUrl = add_query_arg(
+                                [
+                                    'key' => $key,
+                                    'login' => rawurlencode($user->user_login),
+                                    'estimateId' => $estimateId,
+                                ],
+                                trailingslashit($frontendUrl) . 'set-password'
+                            );
+                            
+                            // Add reset URL to portal meta
+                            $portalMeta['account']['resetUrl'] = $resetUrl;
+                            
+                            // Log successful generation for debugging
+                            if (defined('WP_DEBUG') && WP_DEBUG) {
+                                error_log('[CheapAlarms][DEBUG] Successfully generated resetUrl: ' . wp_json_encode([
+                                    'userId' => $userId,
+                                    'email' => $email,
+                                    'estimateId' => $estimateId,
+                                    'resetUrlLength' => strlen($resetUrl),
+                                ]));
+                            }
+                        }
                     }
                 }
+            } else {
+                error_log('[CheapAlarms][WARNING] Cannot generate resetUrl - userId is invalid: ' . wp_json_encode([
+                    'userId' => $userId,
+                    'email' => $email,
+                    'estimateId' => $estimateId,
+                ]));
             }
             
             // Save portal meta once with all data (CRITICAL: Portal access depends on this)
@@ -622,6 +758,31 @@ class QuoteRequestController implements ControllerInterface
             
             // Initialize emailTemplate variable (may be null if rendering fails)
             $emailTemplate = null;
+            
+            // CRITICAL: For new users (variation 'A'), resetUrl MUST be present
+            // If it's missing, log a critical error as this prevents password setup
+            $detectedVariation = \CheapAlarms\Plugin\Services\UserContextHelper::detectEmailVariation('quote-request', $userContext);
+            
+            // Log variation detection with full context
+            error_log('[CheapAlarms][INFO] Email variation detected: ' . $detectedVariation . ' for email: ' . $email . ' | ' . wp_json_encode([
+                'isTrulyNewUser' => $isTrulyNewUser,
+                'isNewUser' => $userContext['isNewUser'] ?? false,
+                'hasPasswordSet' => $userContext['hasPasswordSet'] ?? false,
+                'hasPreviousEstimates' => $userContext['hasPreviousEstimates'] ?? false,
+                'estimateCount' => $userContext['estimateCount'] ?? 0,
+                'resetUrlExists' => !empty($resetUrl),
+                'userId' => $userId,
+            ]));
+            
+            if ($detectedVariation === 'A' && empty($resetUrl)) {
+                error_log('[CheapAlarms][CRITICAL] resetUrl is missing for new user (variation A) - user cannot set password!: ' . wp_json_encode([
+                    'userId' => $userId,
+                    'email' => $email,
+                    'estimateId' => $estimateId,
+                    'userContext' => $userContext,
+                    'isTrulyNewUser' => $isTrulyNewUser,
+                ]));
+            }
             
             // Render context-aware email template
             try {

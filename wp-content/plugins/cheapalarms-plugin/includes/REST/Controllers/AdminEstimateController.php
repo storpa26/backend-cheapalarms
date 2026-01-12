@@ -1656,18 +1656,44 @@ class AdminEstimateController extends AdminController
                 $result['contact']['contactId'] = $contactId;
             }
 
-            // Step 2 & 3: Find all estimates and invoices for this contact (using helper)
-            $estimateResult = $this->findItemIdsByContact($contactId, $locationId, '/invoices/estimate/list', $ghlClient);
-            $estimateIds = $estimateResult['ids'];
+            // Step 2 & 3: Find all estimates and invoices
+            // CRITICAL: Search by BOTH contact ID (if exists) AND email directly
+            // This ensures we find everything even if contact was deleted or items are orphaned
+            $estimateIds = [];
+            $invoiceIds = [];
+            $estimateErrors = [];
+            $invoiceErrors = [];
+
+            // Method 1: Search by contact ID (faster, if contact exists)
+            if ($contactId) {
+                $estimateResultByContact = $this->findItemIdsByContact($contactId, $locationId, '/invoices/estimate/list', $ghlClient);
+                $invoiceResultByContact = $this->findItemIdsByContact($contactId, $locationId, '/invoices/', $ghlClient);
+                $estimateIds = array_merge($estimateIds, $estimateResultByContact['ids']);
+                $invoiceIds = array_merge($invoiceIds, $invoiceResultByContact['ids']);
+                $estimateErrors = array_merge($estimateErrors, $estimateResultByContact['errors']);
+                $invoiceErrors = array_merge($invoiceErrors, $invoiceResultByContact['errors']);
+            }
+
+            // Method 2: ALWAYS search by email directly (catches orphaned items)
+            // This is critical - items may exist even if contact doesn't
+            $estimateResultByEmail = $this->findItemIdsByEmail($email, $locationId, '/invoices/estimate/list', $ghlClient);
+            $invoiceResultByEmail = $this->findItemIdsByEmail($email, $locationId, '/invoices/', $ghlClient);
+            $estimateIds = array_merge($estimateIds, $estimateResultByEmail['ids']);
+            $invoiceIds = array_merge($invoiceIds, $invoiceResultByEmail['ids']);
+            $estimateErrors = array_merge($estimateErrors, $estimateResultByEmail['errors']);
+            $invoiceErrors = array_merge($invoiceErrors, $invoiceResultByEmail['errors']);
+
+            // Remove duplicates (items found by both methods)
+            $estimateIds = array_values(array_unique($estimateIds));
+            $invoiceIds = array_values(array_unique($invoiceIds));
+
             $result['estimates']['found'] = count($estimateIds);
             $result['estimates']['estimateIds'] = $estimateIds;
-            $result['estimates']['errors'] = $estimateResult['errors'];
+            $result['estimates']['errors'] = $estimateErrors;
 
-            $invoiceResult = $this->findItemIdsByContact($contactId, $locationId, '/invoices/', $ghlClient);
-            $invoiceIds = $invoiceResult['ids'];
             $result['invoices']['found'] = count($invoiceIds);
             $result['invoices']['invoiceIds'] = $invoiceIds;
-            $result['invoices']['errors'] = $invoiceResult['errors'];
+            $result['invoices']['errors'] = $invoiceErrors;
 
             // Check batch size limits to prevent timeouts
             $maxBatchSize = 1000; // Reasonable limit to prevent timeouts
@@ -1694,6 +1720,8 @@ class AdminEstimateController extends AdminController
             $this->deleteItemsByIds($invoiceIds, 'invoice', $locationId, $result);
 
             // Step 6: Delete contact from GHL
+            // CRITICAL: Try to delete contact even if we didn't find it initially
+            // Contact might exist but search failed, or contact might be in different location
             if ($contactId) {
                 $ghlResult = $ghlClient->delete(
                     '/contacts/' . rawurlencode($contactId),
@@ -1704,10 +1732,63 @@ class AdminEstimateController extends AdminController
                 );
 
                 if (is_wp_error($ghlResult)) {
-                    $result['contact']['error'] = $ghlResult->get_error_message();
+                    $errorData = $ghlResult->get_error_data();
+                    $httpCode = $errorData['code'] ?? null;
+                    
+                    // 404 means contact already deleted - that's ok
+                    if ($httpCode === 404) {
+                        $result['contact']['deleted'] = true;
+                        $result['contact']['ok'] = true;
+                        $result['contact']['message'] = 'Contact already deleted or not found';
+                    } else {
+                        $result['contact']['error'] = $ghlResult->get_error_message();
+                        $result['contact']['code'] = $ghlResult->get_error_code();
+                        $result['contact']['httpCode'] = $httpCode;
+                    }
                 } else {
                     $result['contact']['deleted'] = true;
                     $result['contact']['ok'] = true;
+                }
+            } else {
+                // Contact not found - try to search again with different method
+                // Sometimes contact exists but search failed
+                $logger->info('Contact ID not found, attempting direct email search for contact deletion', [
+                    'correlationId' => $correlationId,
+                    'email' => $email,
+                ]);
+                
+                // Try to find contact one more time with a different search
+                $retryContactId = $this->findContactIdByEmail($email, $locationId, $ghlClient);
+                if ($retryContactId && !is_wp_error($retryContactId)) {
+                    $ghlResult = $ghlClient->delete(
+                        '/contacts/' . rawurlencode($retryContactId),
+                        [],
+                        $locationId,
+                        10,
+                        0
+                    );
+                    
+                    if (is_wp_error($ghlResult)) {
+                        $errorData = $ghlResult->get_error_data();
+                        $httpCode = $errorData['code'] ?? null;
+                        if ($httpCode === 404) {
+                            $result['contact']['deleted'] = true;
+                            $result['contact']['ok'] = true;
+                            $result['contact']['message'] = 'Contact already deleted';
+                        } else {
+                            $result['contact']['error'] = $ghlResult->get_error_message();
+                        }
+                    } else {
+                        $result['contact']['found'] = true;
+                        $result['contact']['contactId'] = $retryContactId;
+                        $result['contact']['deleted'] = true;
+                        $result['contact']['ok'] = true;
+                    }
+                } else {
+                    // Contact truly doesn't exist - mark as ok (nothing to delete)
+                    $result['contact']['found'] = false;
+                    $result['contact']['ok'] = true;
+                    $result['contact']['message'] = 'Contact not found in GHL';
                 }
             }
 
@@ -1813,6 +1894,74 @@ class AdminEstimateController extends AdminController
                 if ($cid && $cid === $contactId) {
                     $itemId = $record['id'] ?? $record['_id'] ?? $record['estimateId'] ?? $record['invoiceId'] ?? null;
                     if ($itemId) {
+                        $ids[] = $itemId;
+                    }
+                }
+            }
+            
+            $next = $response['nextOffset'] ?? ($response['meta']['nextOffset'] ?? null);
+            $offset = $next ? (string)$next : null;
+        } while ($offset !== null);
+        
+        return ['ids' => $ids, 'errors' => $errors];
+    }
+
+    /**
+     * Find all item IDs (estimates or invoices) by email address directly
+     * Searches through all items and matches by contact email
+     * This ensures we find items even if contact doesn't exist
+     * 
+     * @param string $email Email address to search for
+     * @param string $locationId Location ID
+     * @param string $endpoint GHL endpoint ('/invoices/estimate/list' or '/invoices/')
+     * @param \CheapAlarms\Plugin\Services\GhlClient $ghlClient
+     * @return array{ids: array, errors: array}
+     */
+    private function findItemIdsByEmail(string $email, string $locationId, string $endpoint, \CheapAlarms\Plugin\Services\GhlClient $ghlClient): array
+    {
+        $ids = [];
+        $errors = [];
+        $email = strtolower(trim($email)); // Normalize for comparison
+        
+        if (empty($email)) {
+            return ['ids' => [], 'errors' => []];
+        }
+        
+        $offset = '0';
+        $loops = 0;
+        $maxLoops = 100;
+        
+        do {
+            $loops++;
+            if ($loops > $maxLoops) {
+                $errors[] = 'Max loops reached while searching by email';
+                break;
+            }
+            
+            $query = ['altId' => $locationId, 'altType' => 'location', 'limit' => 50, 'offset' => $offset];
+            $response = $ghlClient->get($endpoint, $query, 25, $locationId);
+            
+            if (is_wp_error($response)) {
+                $errors[] = $response->get_error_message();
+                break;
+            }
+            
+            $records = $response['estimates'] ?? $response['invoices'] ?? $response['items'] ?? [];
+            foreach ($records as $record) {
+                // Check contact email in various possible locations
+                $contactEmail = '';
+                if (isset($record['contact']['email'])) {
+                    $contactEmail = $record['contact']['email'];
+                } elseif (isset($record['contactDetails']['email'])) {
+                    $contactEmail = $record['contactDetails']['email'];
+                } elseif (isset($record['email'])) {
+                    $contactEmail = $record['email'];
+                }
+                
+                // Normalize and compare
+                if ($contactEmail && strtolower(trim($contactEmail)) === $email) {
+                    $itemId = $record['id'] ?? $record['_id'] ?? $record['estimateId'] ?? $record['invoiceId'] ?? null;
+                    if ($itemId && !in_array($itemId, $ids, true)) {
                         $ids[] = $itemId;
                     }
                 }
@@ -1973,27 +2122,66 @@ class AdminEstimateController extends AdminController
         if ($userId) {
             $user = get_user_by('id', $userId);
             
-            // Safety: Never delete admin users
-            if ($user && !user_can($user, 'manage_options')) {
-                // Delete all user meta first
-                delete_user_meta($userId, 'ca_estimate_ids');
-                delete_user_meta($userId, 'ca_estimate_locations');
-                delete_user_meta($userId, 'ghl_contact_id');
-                delete_user_meta($userId, 'ca_password_set_at');
-                delete_user_meta($userId, 'ca_last_login');
-                
-                // Hard delete user (no trash)
-                if (!function_exists('wp_delete_user')) {
-                    require_once ABSPATH . 'wp-admin/includes/user.php';
-                }
-                $deleted = wp_delete_user($userId, true); // true = reassign to admin (or delete if no reassign)
-                
-                if ($deleted) {
-                    $result['wordpressUser']['deleted'] = true;
-                    $result['wordpressUser']['ok'] = true;
-                }
+            if (!$user) {
+                $result['wordpressUser']['found'] = true;
+                $result['wordpressUser']['error'] = 'User found but could not load user object';
+                return;
             }
+            
+            // Safety: Never delete admin users
+            if (user_can($user, 'manage_options')) {
+                $result['wordpressUser']['found'] = true;
+                $result['wordpressUser']['error'] = 'Cannot delete administrator user';
+                return;
+            }
+            
+            // Delete ALL ca_* user meta keys (comprehensive cleanup)
+            global $wpdb;
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key LIKE %s",
+                $userId,
+                'ca_%'
+            ));
+            
+            // Also delete specific known meta keys (redundant but ensures cleanup)
+            $metaKeys = [
+                'ca_estimate_ids',
+                'ca_estimate_id',
+                'ca_estimate_locations',
+                'ghl_contact_id',
+                'ca_password_set_at',
+                'ca_last_login',
+                'ca_portal_access',
+                'ca_customer_data',
+            ];
+            
+            foreach ($metaKeys as $key) {
+                delete_user_meta($userId, $key);
+            }
+            
+            // Hard delete user (no trash)
+            if (!function_exists('wp_delete_user')) {
+                require_once ABSPATH . 'wp-admin/includes/user.php';
+            }
+            
+            // Get admin user ID for reassignment (or use 1 as fallback)
+            $adminUsers = get_users(['role' => 'administrator', 'number' => 1]);
+            $reassignTo = !empty($adminUsers) ? $adminUsers[0]->ID : 1;
+            
+            $deleted = wp_delete_user($userId, $reassignTo);
+            
+            if ($deleted) {
+                $result['wordpressUser']['deleted'] = true;
+                $result['wordpressUser']['ok'] = true;
+            } else {
+                $result['wordpressUser']['error'] = 'wp_delete_user returned false';
+            }
+            
             $result['wordpressUser']['found'] = true;
+        } else {
+            // User doesn't exist - that's ok
+            $result['wordpressUser']['found'] = false;
+            $result['wordpressUser']['ok'] = true;
         }
     }
 
