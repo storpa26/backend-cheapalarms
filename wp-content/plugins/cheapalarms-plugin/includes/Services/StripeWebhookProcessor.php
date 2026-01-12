@@ -168,6 +168,12 @@ class StripeWebhookProcessor
         $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? 0;
         $totals = $this->computePaymentTotals($payments, $invoiceTotal);
         
+        // Update invoice meta with payment data
+        $invoiceMeta = $meta['invoice'] ?? [];
+        $invoiceMeta['amountDue'] = $totals['remainingBalance'];
+        // Set status based on payment totals: 'paid' if fully paid, 'partial' if partially paid, otherwise keep existing status
+        $invoiceMeta['status'] = $totals['isFullyPaid'] ? 'paid' : ($totals['totalPaid'] > 0 ? 'partial' : ($invoiceMeta['status'] ?? 'draft'));
+        
         // Update portal meta
         $this->portalMetaRepo->merge($estimateId, [
             'payment' => array_merge($payment, [
@@ -179,6 +185,7 @@ class StripeWebhookProcessor
                 'depositPaidAt' => $totals['depositPaidAt'],
                 'status' => $totals['status'],
             ]),
+            'invoice' => $invoiceMeta,
         ]);
         
         return true;

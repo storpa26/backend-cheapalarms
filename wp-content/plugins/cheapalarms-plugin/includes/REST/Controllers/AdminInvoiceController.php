@@ -228,12 +228,22 @@ class AdminInvoiceController extends AdminController
                 $linkedEstimateId = (string)$linkedEstimateId;
             }
             
-            // Get portal status from pre-fetched meta
+            // Get portal status and calculate amountDue from pre-fetched meta
             $portalStatus = 'sent';
+            $calculatedAmountDue = $item['amountDue'] ?? $item['total'] ?? 0;
+            
             if ($linkedEstimateId && isset($allMeta[$linkedEstimateId])) {
                 $meta = $allMeta[$linkedEstimateId];
                 if (!empty($meta)) {
                     $portalStatus = $meta['invoice']['status'] ?? $meta['quote']['status'] ?? 'sent';
+                    
+                    // Calculate amountDue from payment data (portal meta takes precedence over GHL)
+                    if (isset($meta['invoice']['amountDue'])) {
+                        $calculatedAmountDue = (float)$meta['invoice']['amountDue'];
+                    } elseif (isset($meta['payment']['remainingBalance'])) {
+                        // Fallback: use payment remainingBalance if invoice amountDue not set
+                        $calculatedAmountDue = (float)$meta['payment']['remainingBalance'];
+                    }
                 }
             }
 
@@ -243,7 +253,7 @@ class AdminInvoiceController extends AdminController
                 'contactName'       => $item['contactName'] ?? '',
                 'contactEmail'      => $item['contactEmail'] ?? '',
                 'total'             => $item['total'] ?? 0,
-                'amountDue'         => $item['amountDue'] ?? 0,
+                'amountDue'         => $calculatedAmountDue,
                 'currency'          => $item['currency'] ?? 'AUD',
                 'ghlStatus'         => $item['status'] ?? 'draft',
                 'portalStatus'      => $portalStatus,
@@ -336,6 +346,10 @@ class AdminInvoiceController extends AdminController
             }
         }
         
+        // Calculate amountDue from payment data in portal meta (if available)
+        $calculatedAmountDue = $invoice['amountDue'] ?? $invoice['total'] ?? 0;
+        $calculatedStatus = $invoice['status'] ?? 'draft';
+        
         if ($linkedEstimateId) {
             // Get basic estimate info from portal meta
             $meta = $this->getPortalMeta($linkedEstimateId);
@@ -346,6 +360,19 @@ class AdminInvoiceController extends AdminController
                 ];
                 // Get portal status from invoice meta (if stored) or estimate status
                 $portalStatus = $meta['invoice']['status'] ?? $meta['quote']['status'] ?? 'sent';
+                
+                // Calculate amountDue from payment data (portal meta takes precedence over GHL)
+                if (isset($meta['invoice']['amountDue'])) {
+                    $calculatedAmountDue = (float)$meta['invoice']['amountDue'];
+                } elseif (isset($meta['payment']['remainingBalance'])) {
+                    // Fallback: use payment remainingBalance if invoice amountDue not set
+                    $calculatedAmountDue = (float)$meta['payment']['remainingBalance'];
+                }
+                
+                // Use portal status if available
+                if (isset($meta['invoice']['status'])) {
+                    $calculatedStatus = $meta['invoice']['status'];
+                }
             }
         }
 
@@ -362,7 +389,7 @@ class AdminInvoiceController extends AdminController
             'tax'           => $invoice['tax'] ?? 0,
             'discount'      => $invoice['discount'] ?? 0,
             'total'         => $invoice['total'] ?? 0,
-            'amountDue'     => $invoice['amountDue'] ?? 0,
+            'amountDue'     => $calculatedAmountDue,
             'currency'      => $invoice['currency'] ?? 'AUD',
             'issueDate'     => $invoice['issueDate'] ?? null,
             'dueDate'       => $invoice['dueDate'] ?? null,

@@ -1561,10 +1561,18 @@ class PortalService
                 $workflow['bookedAt'] = $meta['workflow']['bookedAt'];
             }
 
+            // Update invoice meta with payment data
+            // Calculate amountDue and status based on payment records
+            $invoiceMeta = $meta['invoice'] ?? [];
+            $invoiceMeta['amountDue'] = max(0, $invoiceTotal - $totalPaidAmount);
+            // Set status: 'paid' if fully paid, 'partial' if partially paid, otherwise keep existing status
+            $invoiceMeta['status'] = $isFullyPaid ? 'paid' : ($totalPaidAmount > 0 ? 'partial' : ($invoiceMeta['status'] ?? 'draft'));
+            
             // Update meta
             $this->updateMeta($estimateId, [
                 'payment' => $payment,
                 'workflow' => $workflow,
+                'invoice' => $invoiceMeta,
             ]);
             
             // Release lock
