@@ -15,6 +15,13 @@ use WP_REST_Request;
 use WP_REST_Response;
 
 use function sanitize_text_field;
+use function sanitize_email;
+use function email_exists;
+use function wp_delete_user;
+use function get_user_by;
+use function delete_user_meta;
+use function delete_option;
+use function wp_json_encode;
 
 class AdminEstimateController extends AdminController
 {
@@ -135,6 +142,20 @@ class AdminEstimateController extends AdminController
                     'alreadyScheduled'=> $already ? true : false,
                     'locationId'      => $locationId,
                 ]);
+            },
+        ]);
+
+        // Complete delete by email - deletes contact, estimates, invoices, metadata, and WordPress user
+        register_rest_route('ca/v1', '/admin/data/delete-by-email', [
+            'methods'             => 'POST',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->deleteByEmail($request);
             },
         ]);
 
@@ -1538,6 +1559,472 @@ class AdminEstimateController extends AdminController
             'alreadyDeleted' => $alreadyDeleted && empty($deleted),
             'deleted' => $deleted,
         ];
+    }
+
+    /**
+     * Complete deletion by email - deletes contact, estimates, invoices, metadata, and WordPress user
+     * Hard delete - no trash, everything is permanently removed
+     * 
+     * @param WP_REST_Request $request
+     * @return WP_REST_Response
+     */
+    public function deleteByEmail(WP_REST_Request $request): WP_REST_Response
+    {
+        // Safety gate
+        $gateCheck = $this->checkDestructiveActionsEnabled();
+        if ($gateCheck) {
+            return $this->respond($gateCheck);
+        }
+
+        // SECURITY: Rate limit destructive operations to prevent abuse
+        $rateCheck = $this->auth->enforceRateLimit('delete_by_email', 5, 300); // 5 requests per 5 minutes
+        if (is_wp_error($rateCheck)) {
+            return $this->respond($rateCheck);
+        }
+
+        // Increase execution time limit for large deletions
+        $originalTimeLimit = ini_get('max_execution_time');
+        @set_time_limit(300); // 5 minutes for large deletions
+
+        try {
+            $body = $request->get_json_params() ?? [];
+            // Trim email before sanitization (best practice)
+            $email = trim(sanitize_email($body['email'] ?? ''));
+            $confirm = sanitize_text_field($body['confirm'] ?? '');
+            $locationId = $this->resolveLocationIdOptional($request) ?: sanitize_text_field($body['locationId'] ?? '');
+
+            // Validation - use filter_var for additional security (best practice)
+            if (empty($email)) {
+                return $this->respond(new WP_Error('bad_request', __('Email is required.', 'cheapalarms'), ['status' => 400]));
+            }
+            
+            // Double-validate email format (sanitize_email + filter_var for extra security)
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return $this->respond(new WP_Error('bad_request', __('Invalid email format.', 'cheapalarms'), ['status' => 400]));
+            }
+
+            if ($confirm !== 'DELETE_ALL') {
+                return $this->respond(new WP_Error('bad_request', __('Confirmation required. Set confirm="DELETE_ALL" in request body.', 'cheapalarms'), ['status' => 400]));
+            }
+
+            if (empty($locationId)) {
+                $locationId = $this->container->get(\CheapAlarms\Plugin\Config\Config::class)->getLocationId();
+                if (empty($locationId)) {
+                    return $this->respond(new WP_Error('missing_location', __('locationId is required.', 'cheapalarms'), ['status' => 400]));
+                }
+            }
+
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $currentUser = wp_get_current_user();
+            $correlationId = wp_generate_password(12, false);
+
+            $logger->info('Complete delete by email initiated', [
+                'correlationId' => $correlationId,
+                'email' => $email,
+                'locationId' => $locationId,
+                'deletedByUserId' => $currentUser->ID ?? null,
+                'deletedByUserEmail' => $currentUser->user_email ?? null,
+            ]);
+
+            $result = [
+                'ok' => true,
+                'correlationId' => $correlationId,
+                'email' => $email,
+                'contact' => ['ok' => false, 'found' => false, 'deleted' => false],
+                'estimates' => ['ok' => false, 'found' => 0, 'deleted' => 0, 'errors' => []],
+                'invoices' => ['ok' => false, 'found' => 0, 'deleted' => 0, 'errors' => []],
+                'metadata' => ['ok' => false, 'cleaned' => 0],
+                'wordpressUser' => ['ok' => false, 'found' => false, 'deleted' => false],
+            ];
+
+            $ghlClient = $this->container->get(\CheapAlarms\Plugin\Services\GhlClient::class);
+
+            // Step 1: Find contact by email
+            // Note: Continue even if contact search fails - estimates/invoices may still exist
+            $contactId = $this->findContactIdByEmail($email, $locationId, $ghlClient);
+            if (is_wp_error($contactId)) {
+                $result['contact']['error'] = $contactId->get_error_message();
+                $logger->warning('Contact search failed, continuing with estimates/invoices deletion', [
+                    'correlationId' => $correlationId,
+                    'email' => $email,
+                    'error' => $contactId->get_error_message(),
+                ]);
+                // Don't return early - continue to delete estimates/invoices that may exist
+                $contactId = null;
+            } else if ($contactId) {
+                $result['contact']['found'] = true;
+                $result['contact']['contactId'] = $contactId;
+            }
+
+            // Step 2 & 3: Find all estimates and invoices for this contact (using helper)
+            $estimateResult = $this->findItemIdsByContact($contactId, $locationId, '/invoices/estimate/list', $ghlClient);
+            $estimateIds = $estimateResult['ids'];
+            $result['estimates']['found'] = count($estimateIds);
+            $result['estimates']['estimateIds'] = $estimateIds;
+            $result['estimates']['errors'] = $estimateResult['errors'];
+
+            $invoiceResult = $this->findItemIdsByContact($contactId, $locationId, '/invoices/', $ghlClient);
+            $invoiceIds = $invoiceResult['ids'];
+            $result['invoices']['found'] = count($invoiceIds);
+            $result['invoices']['invoiceIds'] = $invoiceIds;
+            $result['invoices']['errors'] = $invoiceResult['errors'];
+
+            // Check batch size limits to prevent timeouts
+            $maxBatchSize = 1000; // Reasonable limit to prevent timeouts
+            if (count($estimateIds) > $maxBatchSize || count($invoiceIds) > $maxBatchSize) {
+                return $this->respond(new WP_Error(
+                    'too_many_items',
+                    sprintf(
+                        __('Too many items to delete (max %d). Found %d estimates and %d invoices. Please contact support or delete in smaller batches.', 'cheapalarms'),
+                        $maxBatchSize,
+                        count($estimateIds),
+                        count($invoiceIds)
+                    ),
+                    [
+                        'status' => 400,
+                        'estimatesFound' => count($estimateIds),
+                        'invoicesFound' => count($invoiceIds),
+                        'maxBatchSize' => $maxBatchSize,
+                    ]
+                ));
+            }
+
+            // Step 4 & 5: Delete all estimates and invoices (using helper)
+            $this->deleteItemsByIds($estimateIds, 'estimate', $locationId, $result);
+            $this->deleteItemsByIds($invoiceIds, 'invoice', $locationId, $result);
+
+            // Step 6: Delete contact from GHL
+            if ($contactId) {
+                $ghlResult = $ghlClient->delete(
+                    '/contacts/' . rawurlencode($contactId),
+                    [],
+                    $locationId,
+                    10,
+                    0
+                );
+
+                if (is_wp_error($ghlResult)) {
+                    $result['contact']['error'] = $ghlResult->get_error_message();
+                } else {
+                    $result['contact']['deleted'] = true;
+                    $result['contact']['ok'] = true;
+                }
+            }
+
+            // Step 7: Clean up ALL metadata (using helper)
+            $metadataCleaned = $this->cleanupEstimateMetadata($estimateIds);
+            $result['metadata']['cleaned'] = $metadataCleaned;
+            $result['metadata']['ok'] = true;
+
+            // Step 8: Delete WordPress user (using helper)
+            $this->deleteWordPressUserByEmail($email, $result);
+
+            // Mark overall success - allow partial success if contact/user doesn't exist
+            // This handles cases where contact/user was already deleted but estimates/invoices remain
+            $result['ok'] = (
+                // Contact: ok if deleted OR not found (already deleted or never existed)
+                ($result['contact']['ok'] || !$result['contact']['found']) &&
+                // Estimates: all found must be deleted (or none found)
+                $result['estimates']['deleted'] === $result['estimates']['found'] &&
+                // Invoices: all found must be deleted (or none found)
+                $result['invoices']['deleted'] === $result['invoices']['found'] &&
+                // Metadata: always ok (just cleanup operation)
+                $result['metadata']['ok'] &&
+                // WordPress user: ok if deleted OR not found (no account exists)
+                ($result['wordpressUser']['ok'] || !$result['wordpressUser']['found'])
+            );
+
+            // Add descriptive error message for partial failures
+            if (!$result['ok']) {
+                $errors = [];
+                if ($result['contact']['found'] && !$result['contact']['ok']) {
+                    $errors[] = 'Contact deletion failed' . ($result['contact']['error'] ? ': ' . $result['contact']['error'] : '');
+                }
+                if ($result['estimates']['deleted'] !== $result['estimates']['found']) {
+                    $failed = $result['estimates']['found'] - $result['estimates']['deleted'];
+                    $errors[] = sprintf('%d of %d estimate(s) failed to delete', $failed, $result['estimates']['found']);
+                }
+                if ($result['invoices']['deleted'] !== $result['invoices']['found']) {
+                    $failed = $result['invoices']['found'] - $result['invoices']['deleted'];
+                    $errors[] = sprintf('%d of %d invoice(s) failed to delete', $failed, $result['invoices']['found']);
+                }
+                if ($result['wordpressUser']['found'] && !$result['wordpressUser']['ok']) {
+                    $errors[] = 'WordPress user deletion failed';
+                }
+                
+                $result['error'] = !empty($errors) ? implode(', ', $errors) : 'Partial deletion completed with errors';
+                $result['err'] = $result['error']; // Backward compatibility
+            }
+
+            $logger->info('Complete delete by email finished', [
+                'correlationId' => $correlationId,
+                'email' => $email,
+                'result' => $result,
+            ]);
+
+            return $this->respond($result);
+        } finally {
+            // Always restore original time limit
+            if ($originalTimeLimit !== false && $originalTimeLimit !== '0') {
+                @set_time_limit((int)$originalTimeLimit);
+            }
+        }
+    }
+
+    /**
+     * Find all item IDs (estimates or invoices) for a contact by paginating through GHL API
+     * 
+     * @param string|null $contactId Contact ID (null if not found)
+     * @param string $locationId Location ID
+     * @param string $endpoint GHL endpoint ('/invoices/estimate/list' or '/invoices/')
+     * @param \CheapAlarms\Plugin\Services\GhlClient $ghlClient
+     * @return array{ids: array, errors: array}
+     */
+    private function findItemIdsByContact(?string $contactId, string $locationId, string $endpoint, \CheapAlarms\Plugin\Services\GhlClient $ghlClient): array
+    {
+        $ids = [];
+        $errors = [];
+        
+        if (!$contactId) {
+            return ['ids' => [], 'errors' => []];
+        }
+        
+        $offset = '0';
+        $loops = 0;
+        $maxLoops = 100;
+        
+        do {
+            $loops++;
+            if ($loops > $maxLoops) {
+                break;
+            }
+            
+            $query = ['altId' => $locationId, 'altType' => 'location', 'limit' => 50, 'offset' => $offset];
+            $response = $ghlClient->get($endpoint, $query, 25, $locationId);
+            
+            if (is_wp_error($response)) {
+                $errors[] = $response->get_error_message();
+                break;
+            }
+            
+            $records = $response['estimates'] ?? $response['invoices'] ?? $response['items'] ?? [];
+            foreach ($records as $record) {
+                $cid = $record['contact']['id'] ?? ($record['contactId'] ?? '');
+                if ($cid && $cid === $contactId) {
+                    $itemId = $record['id'] ?? $record['_id'] ?? $record['estimateId'] ?? $record['invoiceId'] ?? null;
+                    if ($itemId) {
+                        $ids[] = $itemId;
+                    }
+                }
+            }
+            
+            $next = $response['nextOffset'] ?? ($response['meta']['nextOffset'] ?? null);
+            $offset = $next ? (string)$next : null;
+        } while ($offset !== null);
+        
+        return ['ids' => $ids, 'errors' => $errors];
+    }
+
+    /**
+     * Delete multiple items (estimates or invoices) by ID
+     * 
+     * @param array $itemIds Array of item IDs to delete
+     * @param string $type 'estimate' or 'invoice'
+     * @param string $locationId Location ID
+     * @param array &$result Result array to update (passed by reference)
+     * @return void
+     */
+    private function deleteItemsByIds(array $itemIds, string $type, string $locationId, array &$result): void
+    {
+        $key = $type === 'estimate' ? 'estimates' : 'invoices';
+        $idKey = $type === 'estimate' ? 'estimateId' : 'invoiceId';
+        $routePrefix = $type === 'estimate' ? '/ca/v1/admin/estimates/' : '/ca/v1/admin/invoices/';
+        
+        if ($type === 'estimate') {
+            foreach ($itemIds as $itemId) {
+                $deleteRequest = new WP_REST_Request('POST', $routePrefix . $itemId . '/delete');
+                $deleteRequest->set_param($idKey, $itemId);
+                $deleteRequest->set_body(wp_json_encode([
+                    'confirm' => 'DELETE',
+                    'scope' => 'both', // Delete from both GHL and local
+                    'locationId' => $locationId,
+                ]));
+                $deleteRequest->set_header('Content-Type', 'application/json');
+                
+                $deleteResult = $this->deleteEstimate($deleteRequest);
+                $responseData = $deleteResult->get_data();
+                
+                if (isset($responseData['ok']) && $responseData['ok'] === true) {
+                    $result[$key]['deleted']++;
+                } else {
+                    $result[$key]['errors'][] = [
+                        $idKey => $itemId,
+                        'error' => $responseData['error'] ?? 'Delete failed',
+                        'code' => $responseData['code'] ?? null,
+                        'details' => $responseData['details'] ?? null,
+                    ];
+                }
+            }
+        } else {
+            // Instantiate AdminInvoiceController directly (controllers are not registered in container)
+            $invoiceController = new AdminInvoiceController($this->container);
+            foreach ($itemIds as $itemId) {
+                $deleteRequest = new WP_REST_Request('POST', $routePrefix . $itemId . '/delete');
+                $deleteRequest->set_param($idKey, $itemId);
+                $deleteRequest->set_body(wp_json_encode([
+                    'confirm' => 'DELETE',
+                    'scope' => 'both', // Delete from both GHL and local
+                    'locationId' => $locationId,
+                ]));
+                $deleteRequest->set_header('Content-Type', 'application/json');
+                
+                $deleteResult = $invoiceController->deleteInvoice($deleteRequest);
+                $responseData = $deleteResult->get_data();
+                
+                if (isset($responseData['ok']) && $responseData['ok'] === true) {
+                    $result[$key]['deleted']++;
+                } else {
+                    $result[$key]['errors'][] = [
+                        $idKey => $itemId,
+                        'error' => $responseData['error'] ?? 'Delete failed',
+                        'code' => $responseData['code'] ?? null,
+                        'details' => $responseData['details'] ?? null,
+                    ];
+                }
+            }
+        }
+        
+        // Set ok flag based on deletion results (all found items must be deleted successfully)
+        // Compare against 'found' (set earlier) for clarity and consistency
+        if ($result[$key]['found'] > 0) {
+            $result[$key]['ok'] = $result[$key]['deleted'] === $result[$key]['found'] && empty($result[$key]['errors']);
+        } else {
+            // No items to delete = success (nothing to do)
+            $result[$key]['ok'] = true;
+        }
+    }
+
+    /**
+     * Clean up all metadata for estimates (portal meta, uploads metadata, snapshots)
+     * 
+     * @param array $estimateIds Array of estimate IDs
+     * @return int Number of metadata items cleaned
+     */
+    private function cleanupEstimateMetadata(array $estimateIds): int
+    {
+        global $wpdb;
+        $metadataCleaned = 0;
+
+        // Delete portal meta and uploads metadata in a single loop
+        foreach ($estimateIds as $estimateId) {
+            if (delete_option('ca_portal_meta_' . $estimateId)) {
+                $metadataCleaned++;
+            }
+            if (delete_option('ca_estimate_uploads_' . $estimateId)) {
+                $metadataCleaned++;
+            }
+        }
+
+        // Hard delete snapshots (bypass soft delete)
+        // Batch delete for very large sets to prevent SQL query size issues
+        if (!empty($estimateIds)) {
+            $tableName = $wpdb->prefix . 'ca_estimate_snapshots';
+            $sqlBatchSize = 1000; // MySQL has limits on query size
+            
+            if (count($estimateIds) <= $sqlBatchSize) {
+                // Single query for small sets
+                $placeholders = implode(',', array_fill(0, count($estimateIds), '%s'));
+                $deleted = $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$tableName} WHERE estimate_id IN ($placeholders)",
+                    ...$estimateIds
+                ));
+                if ($deleted !== false) {
+                    $metadataCleaned += $deleted;
+                }
+            } else {
+                // Batch delete for very large sets
+                $batches = array_chunk($estimateIds, $sqlBatchSize);
+                foreach ($batches as $batch) {
+                    $placeholders = implode(',', array_fill(0, count($batch), '%s'));
+                    $deleted = $wpdb->query($wpdb->prepare(
+                        "DELETE FROM {$tableName} WHERE estimate_id IN ($placeholders)",
+                        ...$batch
+                    ));
+                    if ($deleted !== false) {
+                        $metadataCleaned += $deleted;
+                    }
+                }
+            }
+        }
+
+        return $metadataCleaned;
+    }
+
+    /**
+     * Delete WordPress user by email
+     * 
+     * @param string $email Email address
+     * @param array &$result Result array to update (passed by reference)
+     * @return void
+     */
+    private function deleteWordPressUserByEmail(string $email, array &$result): void
+    {
+        $userId = email_exists($email);
+        if ($userId) {
+            $user = get_user_by('id', $userId);
+            
+            // Safety: Never delete admin users
+            if ($user && !user_can($user, 'manage_options')) {
+                // Delete all user meta first
+                delete_user_meta($userId, 'ca_estimate_ids');
+                delete_user_meta($userId, 'ca_estimate_locations');
+                delete_user_meta($userId, 'ghl_contact_id');
+                delete_user_meta($userId, 'ca_password_set_at');
+                delete_user_meta($userId, 'ca_last_login');
+                
+                // Hard delete user (no trash)
+                if (!function_exists('wp_delete_user')) {
+                    require_once ABSPATH . 'wp-admin/includes/user.php';
+                }
+                $deleted = wp_delete_user($userId, true); // true = reassign to admin (or delete if no reassign)
+                
+                if ($deleted) {
+                    $result['wordpressUser']['deleted'] = true;
+                    $result['wordpressUser']['ok'] = true;
+                }
+            }
+            $result['wordpressUser']['found'] = true;
+        }
+    }
+
+    /**
+     * Helper to find contact ID by email (replicates EstimateService logic)
+     * 
+     * @param string $email
+     * @param string $locationId
+     * @param \CheapAlarms\Plugin\Services\GhlClient $ghlClient
+     * @return string|WP_Error|null
+     */
+    private function findContactIdByEmail(string $email, string $locationId, \CheapAlarms\Plugin\Services\GhlClient $ghlClient)
+    {
+        $response = $ghlClient->get('/contacts/search', [
+            'locationId' => $locationId,
+            'query'      => $email,
+        ], 20, $locationId);
+
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        $contacts = $response['contacts'] ?? $response['items'] ?? [];
+        foreach ($contacts as $contact) {
+            $contactEmail = $contact['email'] ?? '';
+            if ($contactEmail && strcasecmp($contactEmail, $email) === 0) {
+                return $contact['id'] ?? null;
+            }
+        }
+
+        return null;
     }
 
 }

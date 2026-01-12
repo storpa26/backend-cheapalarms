@@ -130,22 +130,31 @@ class Plugin
                 $missing[] = 'upload_shared_secret';
             }
             
-            $message = sprintf(
-                __('CheapAlarms plugin is not configured. Missing required secrets: %s. Please configure secrets.php or set environment variables.', 'cheapalarms'),
-                implode(', ', $missing)
-            );
+            // ✅ FIX: Don't call wp_die() during bootstrap - this prevents plugin upload
+            // Log error but allow plugin to load (configuration can be added later)
+            $missingStr = implode(', ', $missing);
+            error_log('[CheapAlarms] Configuration error: Missing required secrets: ' . $missingStr);
             
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                wp_die($message, __('Plugin Configuration Error', 'cheapalarms'), ['response' => 500]);
-            } else {
-                // In production, log error but don't expose details
-                error_log('[CheapAlarms] Configuration error: Missing required secrets');
-                wp_die(
-                    __('CheapAlarms plugin is not properly configured. Please contact the administrator.', 'cheapalarms'),
-                    __('Plugin Configuration Error', 'cheapalarms'),
-                    ['response' => 500]
-                );
-            }
+            // ✅ Only block API calls, not plugin loading/activation
+            // This allows plugin to be uploaded and activated even if not configured
+            add_action('rest_api_init', function() use ($missingStr) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    $message = sprintf(
+                        __('CheapAlarms plugin is not configured. Missing required secrets: %s. Please configure secrets.php or set environment variables.', 'cheapalarms'),
+                        $missingStr
+                    );
+                    wp_die($message, __('Plugin Configuration Error', 'cheapalarms'), ['response' => 500]);
+                } else {
+                    wp_die(
+                        __('CheapAlarms plugin is not properly configured. Please contact the administrator.', 'cheapalarms'),
+                        __('Plugin Configuration Error', 'cheapalarms'),
+                        ['response' => 500]
+                    );
+                }
+            }, 1); // Priority 1 to run before API endpoints register
+            
+            // ✅ Don't initialize services if not configured, but don't kill WordPress
+            return;
         }
         
         // Initialize Sentry early (before other services)
@@ -592,6 +601,16 @@ class Plugin
     public function activate(): void
     {
         try {
+            // Check PHP version first
+            if (version_compare(PHP_VERSION, '7.4.0', '<')) {
+                throw new \RuntimeException(
+                    sprintf(
+                        'CheapAlarms plugin requires PHP 7.4 or higher. You are running PHP %s.',
+                        PHP_VERSION
+                    )
+                );
+            }
+
             Schema::maybeMigrate();
             $this->registerRoles();
             PortalPage::activate();

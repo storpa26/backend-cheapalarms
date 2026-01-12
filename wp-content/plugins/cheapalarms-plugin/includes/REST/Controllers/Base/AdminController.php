@@ -172,6 +172,11 @@ abstract class AdminController implements ControllerInterface
             'err'  => $message,
         ];
         
+        // Always include retry_after for rate limit errors (needed by frontend)
+        if ($code === 'rate_limited' && isset($errorData['retry_after'])) {
+            $response['retry_after'] = (int) $errorData['retry_after'];
+        }
+        
         // Only include detailed error information in debug mode
         if ($isDebug && !empty($errorData) && is_array($errorData)) {
             $sanitized = $this->sanitizeErrorData($errorData);

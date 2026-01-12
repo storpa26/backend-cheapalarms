@@ -4,6 +4,10 @@
  * Description: Hardened WordPress integration layer for CheapAlarms – exposes secure REST endpoints, admin dashboard loader, and GHL integration.
  * Version: 2.0.0
  * Author: CheapAlarms Engineering
+ * Requires at least: 5.8
+ * Requires PHP: 7.4
+ * Text Domain: cheapalarms
+ * License: Proprietary
  */
 
 if (!defined('ABSPATH')) {

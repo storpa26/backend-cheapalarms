@@ -57,6 +57,10 @@ class UserContextHelper
             $estimateIds = array_values(array_filter($estimateIds, fn($id) => $id !== $currentEstimateId));
         }
 
+        // Calculate previous estimate count (used for isNewUser determination and email variation)
+        $previousEstimateCount = count($estimateIds);
+        $hasPreviousEstimates = $previousEstimateCount > 0;
+
         // Check password status
         $hasPasswordSet = false;
         if ($userId) {
@@ -64,30 +68,23 @@ class UserContextHelper
             $passwordSetAt = get_user_meta($userId, 'ca_password_set_at', true);
             $lastLogin = get_user_meta($userId, 'ca_last_login', true);
             
-            // User has password set if:
-            // 1. They've explicitly set it (ca_password_set_at exists)
-            // 2. They've logged in before (ca_last_login exists)
+            // User has password set ONLY if:
+            // 1. They've explicitly set it (ca_password_set_at exists) - RELIABLE
+            // 2. They've logged in before (ca_last_login exists) - RELIABLE
+            //
+            // DO NOT assume password based on:
+            // - Account age (user might not have set password)
+            // - Estimate count (user might have accessed via guest links)
+            // - Any other indirect evidence
+            //
+            // If no explicit tracking exists, default to hasPasswordSet = false
+            // This ensures users get password reset links when needed
             if ($passwordSetAt || $lastLogin) {
                 $hasPasswordSet = true;
-            } else {
-                // 3. Account was created but user_registered is old (more than 24 hours ago) - likely set password
-                // This handles accounts created before tracking was implemented
-                $user = get_user_by('id', $userId);
-                if ($user && isset($user->user_registered) && $user->user_registered) {
-                    $registeredTime = strtotime($user->user_registered);
-                    $now = current_time('timestamp');
-                    // If account is older than 24 hours and no password tracking, assume password might be set
-                    // But be conservative - only if account is very old (24+ hours)
-                    if ($registeredTime !== false && ($now - $registeredTime) > DAY_IN_SECONDS) {
-                        // Account is old, likely has password set
-                        $hasPasswordSet = true;
-                    }
-                }
             }
+            // If no explicit tracking, hasPasswordSet remains false
+            // This is the correct default - user needs password reset link
         }
-
-        $previousEstimateCount = count($estimateIds);
-        $hasPreviousEstimates = $previousEstimateCount > 0;
         
         // Calculate total estimate count (previous + current if provided)
         $totalEstimateCount = $previousEstimateCount;

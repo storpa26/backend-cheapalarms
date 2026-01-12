@@ -496,6 +496,16 @@ class QuoteRequestController implements ControllerInterface
                 ],
             ];
 
+            // CRITICAL FIX: Get user context BEFORE attaching estimate
+            // This ensures correct email variation detection for new users
+            // The context must be calculated when ca_estimate_ids is still empty for new users
+            // Clear user cache to ensure fresh metadata (no stale ca_estimate_ids from cache)
+            if ($userId && $userId > 0) {
+                clean_user_cache($userId);
+                wp_cache_delete($userId, 'user_meta'); // Clear user meta cache specifically
+            }
+            $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email, $estimateId);
+
             // Attach estimate to user if user exists
             if ($userId) {
                 $estimateIds = get_user_meta($userId, 'ca_estimate_ids', true);
@@ -600,8 +610,8 @@ class QuoteRequestController implements ControllerInterface
             // Send context-aware invitation email via GHL Conversations API
             $displayName = trim("{$firstName} {$lastName}");
             
-            // Get user context for email personalization
-            $userContext = \CheapAlarms\Plugin\Services\UserContextHelper::getUserContext($userId, $email, $estimateId);
+            // User context was already fetched above (before attaching estimate)
+            // This ensures correct email variation detection
             
             // Get estimate number for email (use creation response, avoid extra GHL call)
             $estimateNumber = $estimateNumberFromCreate ?? $estimateId; // Fallback to estimateId

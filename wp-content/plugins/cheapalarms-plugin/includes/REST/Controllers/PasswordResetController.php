@@ -356,15 +356,36 @@ class PasswordResetController implements ControllerInterface
         }
 
         // Issue token for auto-login
-        $token = $this->authenticator->issueToken($user);
+        $token = null;
+        try {
+            $token = $this->authenticator->issueToken($user);
+            if (!$token || is_wp_error($token)) {
+                // Log error but don't fail password reset
+                error_log('[Password Reset] Failed to issue token: ' . (is_wp_error($token) ? $token->get_error_message() : 'Token is null'));
+                // Return success without token - user can log in manually
+                return new WP_REST_Response([
+                    'ok' => true,
+                    'message' => 'Password has been reset successfully. Please log in.',
+                ], 200);
+            }
+        } catch (\Exception $e) {
+            // Log exception but don't fail password reset
+            error_log('[Password Reset] Exception issuing token: ' . $e->getMessage());
+            // Return success without token - user can log in manually
+            return new WP_REST_Response([
+                'ok' => true,
+                'message' => 'Password has been reset successfully. Please log in.',
+            ], 200);
+        }
 
+        // Only return token if we successfully got one
         return new WP_REST_Response([
             'ok' => true,
             'message' => 'Password has been reset successfully.',
-            'token' => $token['token'],
-            'expiresAt' => $token['expires_at'],
-            'expiresIn' => $token['expires_in'],
-            'user' => $token['user'],
+            'token' => $token['token'] ?? null,
+            'expiresAt' => $token['expires_at'] ?? null,
+            'expiresIn' => $token['expires_in'] ?? null,
+            'user' => $token['user'] ?? null,
         ], 200);
     }
 
