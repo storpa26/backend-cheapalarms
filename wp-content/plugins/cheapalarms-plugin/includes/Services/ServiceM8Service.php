@@ -442,6 +442,18 @@ class ServiceM8Service
     }
 
     /**
+     * Ensure a ServiceM8 company exists (create if missing)
+     * Public method for MVP - ensures company exists before creating job
+     *
+     * @param array<string, mixed> $contact Contact data (name, email, phone, address, etc.)
+     * @return array{ok: bool, company: array, created: bool}|WP_Error
+     */
+    public function ensureCompany(array $contact): array|WP_Error
+    {
+        return $this->findOrCreateCompany($contact);
+    }
+
+    /**
      * Find or create a ServiceM8 company from estimate contact
      *
      * @param array<string, mixed> $contact Estimate contact data
@@ -450,7 +462,12 @@ class ServiceM8Service
     private function findOrCreateCompany(array $contact): array|WP_Error
     {
         $email = sanitize_email($contact['email'] ?? '');
-        $name = sanitize_text_field($contact['name'] ?? $contact['firstName'] . ' ' . $contact['lastName'] ?? '');
+        // Fix: Properly handle null values in concatenation to avoid trailing spaces
+        $name = sanitize_text_field(
+            $contact['name'] 
+            ?? trim(($contact['firstName'] ?? '') . ' ' . ($contact['lastName'] ?? '')) 
+            ?: ''
+        );
         $phone = sanitize_text_field($contact['phone'] ?? $contact['phoneNo'] ?? '');
 
         if (empty($name)) {
@@ -539,13 +556,15 @@ class ServiceM8Service
 
     /**
      * Create a ServiceM8 job from a GHL estimate
+     * Includes idempotency check - will not create duplicate job if estimate already has job_uuid
      *
      * @param string $estimateId GHL estimate ID
      * @param string $locationId GHL location ID
      * @param array<string, mixed> $options Optional: status, assigned_to_staff_uuid, scheduled_start_date, etc.
-     * @return array{ok: bool, job: array, company: array, companyCreated: bool}|WP_Error
+     * @param JobLinkService|null $linkService Optional: JobLinkService for idempotency check
+     * @return array{ok: bool, job: array, company: array, companyCreated: bool, jobUuid: string}|WP_Error
      */
-    public function createJobFromEstimate(string $estimateId, string $locationId, array $options = []): array|WP_Error
+    public function createJobFromEstimate(string $estimateId, string $locationId, array $options = [], ?JobLinkService $linkService = null): array|WP_Error
     {
         if (empty($estimateId)) {
             return new WP_Error('servicem8_validation', 'Estimate ID is required', ['status' => 400]);
@@ -553,6 +572,41 @@ class ServiceM8Service
 
         if (!$this->estimateService) {
             return new WP_Error('servicem8_config', 'EstimateService not available', ['status' => 500]);
+        }
+
+        // IDEMPOTENCY CHECK: If estimate already has servicem8.job_uuid, do NOT create a new job
+        if ($linkService) {
+            $existingJobUuid = $linkService->getJobUuidByEstimateId($estimateId);
+            if ($existingJobUuid) {
+                $this->logger->info('Job already exists for estimate - returning existing job', [
+                    'estimateId' => $estimateId,
+                    'existingJobUuid' => $existingJobUuid,
+                ]);
+                
+                // Return existing job data
+                $existingJob = $this->getJob($existingJobUuid);
+                if (!is_wp_error($existingJob)) {
+                    // Get company info
+                    $jobData = $existingJob['job'] ?? [];
+                    $companyUuid = $jobData['company_uuid'] ?? null;
+                    $company = null;
+                    if ($companyUuid) {
+                        $companyResult = $this->getCompanies(['uuid' => $companyUuid]);
+                        if (!is_wp_error($companyResult) && !empty($companyResult['companies'])) {
+                            $company = is_array($companyResult['companies']) ? $companyResult['companies'][0] : $companyResult['companies'];
+                        }
+                    }
+                    
+                    return [
+                        'ok' => true,
+                        'job' => $jobData,
+                        'jobUuid' => $existingJobUuid,
+                        'company' => $company,
+                        'companyCreated' => false,
+                        'alreadyExists' => true,
+                    ];
+                }
+            }
         }
 
         // Fetch estimate data
@@ -840,6 +894,115 @@ class ServiceM8Service
             'job' => $jobResponse,
             'jobUuid' => $jobUuid,
             'company' => $company,
+        ];
+    }
+
+    /**
+     * Get job activities for a job (scheduling information)
+     *
+     * @param string $jobUuid ServiceM8 job UUID
+     * @return array{ok: bool, activities: array, count: int}|WP_Error
+     */
+    public function getJobActivities(string $jobUuid)
+    {
+        if (empty($jobUuid)) {
+            return new WP_Error('servicem8_validation', 'Job UUID is required', ['status' => 400]);
+        }
+
+        $result = $this->client->get('/jobactivity.json', ['job_uuid' => sanitize_text_field($jobUuid)]);
+        
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        return [
+            'ok' => true,
+            'activities' => is_array($result) ? $result : [$result],
+            'count' => is_array($result) ? count($result) : 1,
+        ];
+    }
+
+    /**
+     * Schedule a job by creating a Job Activity
+     * This is the correct way to schedule in ServiceM8 (not just updating job fields)
+     *
+     * @param string $jobUuid ServiceM8 job UUID
+     * @param string $staffUuid Staff/technician UUID to assign
+     * @param string $startDate Scheduled start date/time (ISO8601 format: "2024-12-15 09:00:00")
+     * @param string $endDate Scheduled end date/time (ISO8601 format: "2024-12-15 12:00:00")
+     * @param JobLinkService|null $linkService Optional: For idempotency check (prevent duplicate activities)
+     * @return array{ok: bool, activity: array}|WP_Error
+     */
+    public function scheduleJob(string $jobUuid, string $staffUuid, string $startDate, string $endDate, ?JobLinkService $linkService = null): array|WP_Error
+    {
+        if (empty($jobUuid)) {
+            return new WP_Error('servicem8_validation', 'Job UUID is required', ['status' => 400]);
+        }
+        if (empty($staffUuid)) {
+            return new WP_Error('servicem8_validation', 'Staff UUID is required', ['status' => 400]);
+        }
+        if (empty($startDate) || empty($endDate)) {
+            return new WP_Error('servicem8_validation', 'Start date and end date are required', ['status' => 400]);
+        }
+
+        // IDEMPOTENCY CHECK: If scheduling already exists for that job (matching time window), do NOT create duplicate activity
+        if ($linkService) {
+            $existingActivities = $this->getJobActivities($jobUuid);
+            if (!is_wp_error($existingActivities)) {
+                $activities = $existingActivities['activities'] ?? [];
+                foreach ($activities as $activity) {
+                    $activityStart = $activity['start_date'] ?? $activity['scheduled_start_date'] ?? null;
+                    $activityEnd = $activity['end_date'] ?? $activity['scheduled_end_date'] ?? null;
+                    $activityStaff = $activity['staff_uuid'] ?? $activity['assigned_to_staff_uuid'] ?? null;
+                    
+                    // Check if activity matches (same time window and staff)
+                    if ($activityStart === $startDate && $activityEnd === $endDate && $activityStaff === $staffUuid) {
+                        $this->logger->info('Job activity already exists for this time window - returning existing', [
+                            'jobUuid' => $jobUuid,
+                            'startDate' => $startDate,
+                            'endDate' => $endDate,
+                            'staffUuid' => $staffUuid,
+                        ]);
+                        
+                        return [
+                            'ok' => true,
+                            'activity' => $activity,
+                            'alreadyExists' => true,
+                        ];
+                    }
+                }
+            }
+        }
+
+        // Create Job Activity (this is the correct way to schedule in ServiceM8)
+        $activityData = [
+            'job_uuid' => sanitize_text_field($jobUuid),
+            'staff_uuid' => sanitize_text_field($staffUuid),
+            'start_date' => sanitize_text_field($startDate),
+            'end_date' => sanitize_text_field($endDate),
+        ];
+
+        $this->logger->info('Creating ServiceM8 job activity for scheduling', [
+            'jobUuid' => $jobUuid,
+            'staffUuid' => $staffUuid,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+        ]);
+
+        $result = $this->client->post('/jobactivity.json', $activityData);
+        
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        $this->logger->info('ServiceM8 job activity created successfully', [
+            'jobUuid' => $jobUuid,
+            'activityUuid' => $result['uuid'] ?? null,
+        ]);
+
+        return [
+            'ok' => true,
+            'activity' => $result,
         ];
     }
 }

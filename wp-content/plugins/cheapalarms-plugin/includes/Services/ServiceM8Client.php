@@ -103,11 +103,24 @@ class ServiceM8Client
      */
     private function headers(): array
     {
-        return [
+        $headers = [
             'X-API-Key'     => $this->config->getServiceM8ApiKey(),
             'Accept'        => 'application/json',
             'Content-Type'  => 'application/json',
         ];
+        
+        // Log header verification (debug only - remove in production or use logger level)
+        // Verify X-API-Key is present (value masked for security)
+        if (empty($headers['X-API-Key'])) {
+            $this->logger->error('ServiceM8 API key is missing in headers');
+        } else {
+            $this->logger->debug('ServiceM8 request headers prepared', [
+                'hasApiKey' => !empty($headers['X-API-Key']),
+                'headerKeys' => array_keys($headers),
+            ]);
+        }
+        
+        return $headers;
     }
 
     /**

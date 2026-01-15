@@ -4,6 +4,8 @@ namespace CheapAlarms\Plugin\Services;
 
 use WP_Error;
 use WP_User;
+use CheapAlarms\Plugin\Services\ServiceM8Service;
+use CheapAlarms\Plugin\Services\JobLinkService;
 
 use function add_query_arg;
 use function apply_filters;
@@ -517,6 +519,68 @@ class PortalService
         // Update GHL signals (non-blocking - errors don't fail acceptance)
         if ($locationId) {
             $this->updateGhlSignals($estimateId, $locationId);
+        }
+        
+        // Auto-create ServiceM8 job when estimate is accepted (MVP requirement)
+        // Non-blocking - errors don't fail acceptance
+        if ($locationId) {
+            try {
+                if ($this->container->has(ServiceM8Service::class) && $this->container->has(JobLinkService::class)) {
+                    $servicem8Service = $this->container->get(ServiceM8Service::class);
+                    $linkService = $this->container->get(JobLinkService::class);
+                    
+                    // Check if job already exists (idempotency)
+                    $existingJobUuid = $linkService->getJobUuidByEstimateId($estimateId);
+                    if (!$existingJobUuid) {
+                        $this->logger->info('Auto-creating ServiceM8 job for accepted estimate', [
+                            'estimateId' => $estimateId,
+                            'locationId' => $locationId,
+                        ]);
+                        
+                        $jobResult = $servicem8Service->createJobFromEstimate($estimateId, $locationId, [], $linkService);
+                        
+                        if (!is_wp_error($jobResult)) {
+                            $jobUuid = $jobResult['jobUuid'] ?? $jobResult['job']['uuid'] ?? null;
+                            if ($jobUuid) {
+                                $linkMetadata = [
+                                    'autoCreated' => true,
+                                    'createdAt' => current_time('mysql'),
+                                    'createdFrom' => 'estimate_acceptance',
+                                ];
+                                $linkResult = $linkService->linkEstimateToJob($estimateId, $jobUuid, $linkMetadata);
+                                if (!is_wp_error($linkResult)) {
+                                    $this->logger->info('ServiceM8 job auto-created and linked on estimate acceptance', [
+                                        'estimateId' => $estimateId,
+                                        'jobUuid' => $jobUuid,
+                                    ]);
+                                } else {
+                                    $this->logger->warning('ServiceM8 job created but linking failed', [
+                                        'estimateId' => $estimateId,
+                                        'jobUuid' => $jobUuid,
+                                        'error' => $linkResult->get_error_message(),
+                                    ]);
+                                }
+                            }
+                        } else {
+                            $this->logger->warning('Failed to auto-create ServiceM8 job on estimate acceptance', [
+                                'estimateId' => $estimateId,
+                                'error' => $jobResult->get_error_message(),
+                            ]);
+                        }
+                    } else {
+                        $this->logger->info('ServiceM8 job already exists for estimate - skipping auto-create', [
+                            'estimateId' => $estimateId,
+                            'existingJobUuid' => $existingJobUuid,
+                        ]);
+                    }
+                }
+            } catch (\Exception $e) {
+                // Don't fail acceptance if ServiceM8 job creation fails
+                $this->logger->error('Exception during ServiceM8 auto-create job', [
+                    'estimateId' => $estimateId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
         
         // Auto-provision account if needed (moved from getStatus for immediate provisioning)

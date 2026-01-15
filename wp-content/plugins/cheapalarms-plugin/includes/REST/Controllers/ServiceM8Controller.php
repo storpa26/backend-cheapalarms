@@ -28,6 +28,17 @@ class ServiceM8Controller implements ControllerInterface
         $this->auth    = $this->container->get(Authenticator::class);
     }
 
+    /**
+     * Validate UUID format (alphanumeric and hyphens only)
+     *
+     * @param string $uuid UUID to validate
+     * @return bool True if valid format
+     */
+    private function validateUuid(string $uuid): bool
+    {
+        return (bool) preg_match('/^[a-zA-Z0-9\-]+$/', $uuid);
+    }
+
     public function register(): void
     {
         // Test connection endpoint
@@ -184,6 +195,30 @@ class ServiceM8Controller implements ControllerInterface
                 'callback'            => function (WP_REST_Request $request) {
                     $estimateId = sanitize_text_field($request->get_param('estimateId') ?? '');
                     $jobUuid = sanitize_text_field($request->get_param('jobUuid') ?? '');
+
+                    // SECURITY: Require at least one parameter
+                    if (empty($estimateId) && empty($jobUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'estimateId or jobUuid is required',
+                        ], 400);
+                    }
+
+                    // SECURITY: Validate UUID format if provided
+                    if (!empty($jobUuid) && !$this->validateUuid($jobUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid job UUID format',
+                        ], 400);
+                    }
+
+                    // SECURITY: Validate estimateId format (alphanumeric, hyphens, underscores)
+                    if (!empty($estimateId) && !preg_match('/^[a-zA-Z0-9\-_]+$/', $estimateId)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid estimate ID format',
+                        ], 400);
+                    }
 
                     if (!empty($estimateId)) {
                         $linkData = $this->linkService->getLinkByEstimateId($estimateId);
@@ -401,8 +436,8 @@ class ServiceM8Controller implements ControllerInterface
                         ], 409); // Conflict
                     }
 
-                    // Create job from estimate
-                    $result = $this->service->createJobFromEstimate($estimateId, $locationId, $options);
+                    // Create job from estimate (with idempotency check via linkService)
+                    $result = $this->service->createJobFromEstimate($estimateId, $locationId, $options, $this->linkService);
                     
                     if (is_wp_error($result)) {
                         return $this->respond($result);
@@ -442,6 +477,83 @@ class ServiceM8Controller implements ControllerInterface
             ],
         ]);
 
+        // Job Activities endpoints (scheduling)
+        register_rest_route('ca/v1', '/servicem8/jobs/(?P<jobUuid>[a-zA-Z0-9\-]+)/activities', [
+            [
+                'methods'             => 'GET',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $jobUuid = sanitize_text_field($request->get_param('jobUuid'));
+                    
+                    // SECURITY: Validate UUID format
+                    if (!$this->validateUuid($jobUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid job UUID format',
+                        ], 400);
+                    }
+                    
+                    $result = $this->service->getJobActivities($jobUuid);
+                    return $this->respond($result);
+                },
+            ],
+        ]);
+
+        // Schedule job endpoint (creates Job Activity)
+        register_rest_route('ca/v1', '/servicem8/jobs/(?P<jobUuid>[a-zA-Z0-9\-]+)/schedule', [
+            [
+                'methods'             => 'POST',
+                'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
+                'callback'            => function (WP_REST_Request $request) {
+                    $jobUuid = sanitize_text_field($request->get_param('jobUuid'));
+                    
+                    // SECURITY: Validate UUID format
+                    if (!$this->validateUuid($jobUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid job UUID format',
+                        ], 400);
+                    }
+                    
+                    $body = $request->get_json_params();
+                    if (!is_array($body)) {
+                        $body = json_decode($request->get_body(), true);
+                    }
+                    if (!is_array($body)) {
+                        $body = [];
+                    }
+
+                    $staffUuid = sanitize_text_field($body['staffUuid'] ?? '');
+                    $startDate = sanitize_text_field($body['startDate'] ?? '');
+                    $endDate = sanitize_text_field($body['endDate'] ?? '');
+
+                    // SECURITY: Validate staffUuid format
+                    if (!empty($staffUuid) && !$this->validateUuid($staffUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid staff UUID format',
+                        ], 400);
+                    }
+
+                    if (empty($staffUuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'staffUuid is required',
+                        ], 400);
+                    }
+                    if (empty($startDate) || empty($endDate)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'startDate and endDate are required',
+                        ], 400);
+                    }
+
+                    $result = $this->service->scheduleJob($jobUuid, $staffUuid, $startDate, $endDate, $this->linkService);
+                    return $this->respond($result);
+                },
+            ],
+        ]);
+
         // Single job endpoints (MUST be registered AFTER job linking endpoints to avoid route conflict)
         register_rest_route('ca/v1', '/servicem8/jobs/(?P<uuid>[a-zA-Z0-9\-]+)', [
             [
@@ -449,6 +561,15 @@ class ServiceM8Controller implements ControllerInterface
                 'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_view_estimates'),
                 'callback'            => function (WP_REST_Request $request) {
                     $uuid = sanitize_text_field($request->get_param('uuid'));
+                    
+                    // SECURITY: Validate UUID format
+                    if (!$this->validateUuid($uuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid job UUID format',
+                        ], 400);
+                    }
+                    
                     $result = $this->service->getJob($uuid);
                     return $this->respond($result);
                 },
@@ -458,6 +579,15 @@ class ServiceM8Controller implements ControllerInterface
                 'permission_callback' => fn () => $this->isDevBypass() ?: $this->auth->requireCapability('ca_manage_portal'),
                 'callback'            => function (WP_REST_Request $request) {
                     $uuid = sanitize_text_field($request->get_param('uuid'));
+                    
+                    // SECURITY: Validate UUID format
+                    if (!$this->validateUuid($uuid)) {
+                        return new WP_REST_Response([
+                            'ok' => false,
+                            'error' => 'Invalid job UUID format',
+                        ], 400);
+                    }
+                    
                     $result = $this->service->deleteJob($uuid);
                     return $this->respond($result);
                 },
@@ -527,6 +657,21 @@ class ServiceM8Controller implements ControllerInterface
         $response = new WP_REST_Response($result, 200);
         $this->addSecurityHeaders($response);
         return $response;
+    }
+
+    private function addSecurityHeaders(WP_REST_Response $response): void
+    {
+        // Prevent MIME type sniffing
+        $response->header('X-Content-Type-Options', 'nosniff');
+        
+        // XSS protection (legacy but still useful)
+        $response->header('X-XSS-Protection', '1; mode=block');
+        
+        // Prevent clickjacking
+        $response->header('X-Frame-Options', 'DENY');
+        
+        // Referrer policy
+        $response->header('Referrer-Policy', 'strict-origin-when-cross-origin');
     }
 
     private function isDevBypass(): bool

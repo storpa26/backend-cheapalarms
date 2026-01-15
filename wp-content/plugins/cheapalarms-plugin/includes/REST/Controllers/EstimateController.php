@@ -4,6 +4,7 @@ namespace CheapAlarms\Plugin\REST\Controllers;
 
 use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotRepository;
 use CheapAlarms\Plugin\Services\EstimateService;
 use CheapAlarms\Plugin\Services\PortalService;
 use WP_Error;
@@ -26,12 +27,14 @@ class EstimateController implements ControllerInterface
     private EstimateService $service;
     private PortalService $portalService;
     private Authenticator $auth;
+    private EstimateSnapshotRepository $snapshotRepo;
 
     public function __construct(private Container $container)
     {
         $this->service = $this->container->get(EstimateService::class);
         $this->portalService = $this->container->get(PortalService::class);
         $this->auth    = $this->container->get(Authenticator::class);
+        $this->snapshotRepo = $this->container->get(EstimateSnapshotRepository::class);
     }
 
     public function register(): void
@@ -146,44 +149,64 @@ class EstimateController implements ControllerInterface
                 $limit = (int)$request->get_param('limit') ?: 20;
                 $raw = (int)$request->get_param('raw');
                 
-                // Build cache key (include locationId, limit, and raw flag for correctness)
-                $cacheKey = "ca_estimate_list_{$locationId}_{$limit}_{$raw}";
-                
-                // Try to get cached result
-                $result = get_transient($cacheKey);
-                $cacheHit = ($result !== false);
-                
-                if ($cacheHit) {
-                    // Debug logging: Cache HIT
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        $itemCount = count($result['items'] ?? []);
-                        error_log("[CheapAlarms][ESTIMATE_LIST] Cache HIT for location {$locationId}, limit {$limit}, raw {$raw} - using cached list of {$itemCount} estimates");
+                // Prefer snapshot table (fast + scalable). Fall back to transient-cached GHL list if snapshots are empty/unavailable.
+                $items = null;
+                $snapshotItems = $this->snapshotRepo->listByLocation($locationId);
+
+                if (!is_wp_error($snapshotItems) && is_array($snapshotItems) && count($snapshotItems) > 0) {
+                    $items = $snapshotItems;
+
+                    // Best-effort background refresh if snapshots are stale.
+                    $lastSyncedAt = $this->snapshotRepo->lastSyncedAt($locationId);
+                    $stale = false;
+                    if (!is_wp_error($lastSyncedAt) && is_string($lastSyncedAt) && $lastSyncedAt) {
+                        $stale = (time() - (int)strtotime($lastSyncedAt)) > (3 * MINUTE_IN_SECONDS);
+                    }
+                    if ($stale && !wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId])) {
+                        wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
                     }
                 } else {
-                    // Debug logging: Cache MISS - will call GHL
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        $startTime = microtime(true);
-                        error_log("[CheapAlarms][ESTIMATE_LIST] Cache MISS for location {$locationId}, limit {$limit}, raw {$raw} - fetching from GHL API");
+                    // If snapshots are missing/empty, schedule a background sync and fall back to the current transient cache path.
+                    if (!wp_next_scheduled('ca_sync_estimate_snapshots', [$locationId])) {
+                        wp_schedule_single_event(time() + 1, 'ca_sync_estimate_snapshots', [$locationId]);
                     }
-                    
-                    // Fetch from GHL (expensive operation)
-                    $result = $this->service->listEstimates($locationId, $limit, $raw);
-                    
-                    if (is_wp_error($result)) {
-                        return $this->respond($result, $request);
+
+                    // Build cache key for the GHL list
+                    $cacheKey = "ca_estimate_list_ghl_{$locationId}_{$limit}_{$raw}";
+
+                    $result   = get_transient($cacheKey);
+                    $cacheHit = ($result !== false);
+
+                    if (!$cacheHit) {
+                        $result = $this->service->listEstimates($locationId, $limit, $raw);
+                        if (is_wp_error($result)) {
+                            return $this->respond($result, $request);
+                        }
+                        set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
                     }
-                    
-                    // Cache the GHL result for 3 minutes (180 seconds)
-                    // Short TTL to balance freshness vs performance
-                    set_transient($cacheKey, $result, 3 * MINUTE_IN_SECONDS);
-                    
-                    // Debug logging: GHL call completed
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        $duration = round((microtime(true) - $startTime) * 1000, 2);
-                        $itemCount = count($result['items'] ?? []);
-                        error_log("[CheapAlarms][ESTIMATE_LIST] GHL API call completed in {$duration}ms - fetched {$itemCount} estimates for location {$locationId} - cached for 3 minutes");
-                    }
+
+                    $items = $result['items'] ?? [];
                 }
+
+                if (!is_array($items)) {
+                    $items = [];
+                }
+
+                // Apply limit (snapshots return all, we need to limit)
+                if ($limit > 0 && count($items) > $limit) {
+                    $items = array_slice($items, 0, $limit);
+                }
+
+                // Format response to match EstimateService::listEstimates() structure
+                $result = [
+                    'ok'         => true,
+                    'locationId' => $locationId,
+                    'count'      => count($items),
+                    'items'      => $items,
+                ];
+                
+                // Note: raw parameter is ignored when using snapshots (snapshots always have full data in raw_json)
+                // If raw data is needed, it can be fetched via getEstimateById() which uses snapshots
                 
                 return $this->respond($result, $request);
             },

@@ -45,6 +45,20 @@ class AdminEstimateController extends AdminController
 
     public function register(): void
     {
+        // Register chart route FIRST (before estimateId routes) to avoid route conflicts
+        register_rest_route('ca/v1', '/admin/estimates/chart', [
+            'methods'             => 'GET',
+            'permission_callback' => fn () => true,
+            'callback'            => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->getChartData($request);
+            },
+        ]);
+
         register_rest_route('ca/v1', '/admin/estimates', [
             'methods'             => 'GET',
             'permission_callback' => fn () => true, // Let request through, check auth in callback
@@ -329,6 +343,17 @@ class AdminEstimateController extends AdminController
         $status      = sanitize_text_field($request->get_param('status') ?? '');
         $portalStatus = sanitize_text_field($request->get_param('portalStatus') ?? '');
         
+        // Date range filters
+        $startDate = sanitize_text_field($request->get_param('startDate') ?? '');
+        $endDate = sanitize_text_field($request->get_param('endDate') ?? '');
+        // Validate date format if provided
+        if ($startDate && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
+            $startDate = '';
+        }
+        if ($endDate && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) {
+            $endDate = '';
+        }
+        
         // Validate workflow status filter against whitelist
         $validWorkflowStatuses = ['requested', 'sent', 'under_review', 'ready_to_accept', 'accepted', 'rejected', 'booked', 'paid', 'completed'];
         $workflowStatusRaw = sanitize_text_field($request->get_param('workflowStatus') ?? '');
@@ -338,7 +363,7 @@ class AdminEstimateController extends AdminController
 
         // Prefer snapshot table (fast + scalable). Fall back to transient-cached GHL list if snapshots are empty/unavailable.
         $items = null;
-        $snapshotItems = $this->snapshotRepo->listByLocation($locationId);
+        $snapshotItems = $this->snapshotRepo->listByLocation($locationId, $startDate ?: null, $endDate ?: null);
 
         if (!is_wp_error($snapshotItems) && is_array($snapshotItems) && count($snapshotItems) > 0) {
             $items = $snapshotItems;
@@ -429,6 +454,28 @@ class AdminEstimateController extends AdminController
                 }
             } else {
                 $workflowStatusValue = $workflow['status'];
+            }
+
+            // Apply date filters (for GHL fallback - snapshots already filtered in SQL)
+            if ($startDate || $endDate) {
+                $itemDate = $item['createdAt'] ?? $item['created_at'] ?? $item['updatedAt'] ?? $item['updated_at'] ?? null;
+                if ($itemDate) {
+                    // Parse date from various formats
+                    $itemTimestamp = strtotime($itemDate);
+                    if ($itemTimestamp !== false) {
+                        $itemDateOnly = date('Y-m-d', $itemTimestamp);
+                        
+                        if ($startDate && $itemDateOnly < $startDate) {
+                            continue;
+                        }
+                        if ($endDate && $itemDateOnly > $endDate) {
+                            continue;
+                        }
+                    }
+                } elseif ($startDate || $endDate) {
+                    // If date filter is set but item has no date, exclude it
+                    continue;
+                }
             }
 
             // Apply filters
@@ -559,6 +606,50 @@ class AdminEstimateController extends AdminController
     /**
      * Get single estimate detail with portal meta.
      */
+    public function getChartData(WP_REST_Request $request): WP_REST_Response
+    {
+        $locationIdResult = $this->resolveLocationId($request);
+        if (is_wp_error($locationIdResult)) {
+            return $this->respond($locationIdResult);
+        }
+        $locationId = $locationIdResult;
+
+        // Get time range (default: last 30 days)
+        $range = sanitize_text_field($request->get_param('range') ?? '30d');
+        
+        // Calculate start and end dates based on range
+        $endDate = date('Y-m-d');
+        switch ($range) {
+            case '7d':
+                $startDate = date('Y-m-d', strtotime('-7 days'));
+                break;
+            case '30d':
+                $startDate = date('Y-m-d', strtotime('-30 days'));
+                break;
+            case '3m':
+                $startDate = date('Y-m-d', strtotime('-3 months'));
+                break;
+            default:
+                $startDate = date('Y-m-d', strtotime('-30 days'));
+                break;
+        }
+
+        // Get time-series data from snapshot repository
+        $timeSeriesData = $this->snapshotRepo->getTimeSeriesData($locationId, $startDate, $endDate);
+
+        if (is_wp_error($timeSeriesData)) {
+            return $this->respond($timeSeriesData);
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'data' => $timeSeriesData,
+            'range' => $range,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+        ]);
+    }
+
     public function getEstimate(WP_REST_Request $request): WP_REST_Response
     {
         $estimateId = sanitize_text_field($request->get_param('estimateId'));

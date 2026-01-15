@@ -3,6 +3,7 @@
 namespace CheapAlarms\Plugin\Services;
 
 use CheapAlarms\Plugin\Config\Config;
+use CheapAlarms\Plugin\Services\Estimate\EstimateSnapshotRepository;
 use CheapAlarms\Plugin\Services\Shared\PortalMetaRepository;
 use WP_Error;
 
@@ -25,6 +26,25 @@ class EstimateService
         private Logger $logger,
         private \CheapAlarms\Plugin\Services\Container $container
     ) {
+    }
+
+    /**
+     * Get snapshot repository (lazy-loaded to avoid circular dependencies)
+     */
+    private function getSnapshotRepo(): ?EstimateSnapshotRepository
+    {
+        if (!$this->container->has(EstimateSnapshotRepository::class)) {
+            return null;
+        }
+        try {
+            return $this->container->get(EstimateSnapshotRepository::class);
+        } catch (\Exception $e) {
+            // Log but don't fail - gracefully fall back to GHL
+            if (function_exists('error_log')) {
+                error_log('[CheapAlarms] Failed to get EstimateSnapshotRepository: ' . $e->getMessage());
+            }
+            return null;
+        }
     }
 
     /**
@@ -1095,6 +1115,29 @@ class EstimateService
             return new WP_Error('missing_location', __('locationId required', 'cheapalarms'));
         }
 
+        // Try snapshot first (fast DB lookup)
+        $snapshotRepo = $this->getSnapshotRepo();
+        if ($snapshotRepo) {
+            $snapshot = $snapshotRepo->getByEstimateId($estimateId, $locationId);
+            if (!is_wp_error($snapshot)) {
+                // Found in snapshot, return it (100% same structure as GHL)
+                return $snapshot;
+            }
+            // Log non-404 errors for monitoring (404 is expected for new estimates)
+            $errorCode = $snapshot->get_error_code();
+            if ($errorCode !== 'not_found' && function_exists('error_log')) {
+                $this->logger->warning('Snapshot lookup failed, falling back to GHL', [
+                    'estimateId' => $estimateId,
+                    'locationId' => $locationId,
+                    'errorCode' => $errorCode,
+                    'errorMessage' => $snapshot->get_error_message(),
+                ]);
+            }
+            // If not found (404), continue to GHL API as fallback
+            // Other errors (DB errors, parse errors) also fall through to GHL
+        }
+
+        // Fallback to GHL API if snapshot not available or not found
         $response = $this->client->get(
             '/invoices/estimate/' . rawurlencode($estimateId),
             ['altId' => $locationId, 'altType' => 'location', 'raw' => 1]

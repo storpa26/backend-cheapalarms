@@ -99,9 +99,11 @@ class EstimateSnapshotRepository
     }
 
     /**
+     * @param string|null $startDate Optional start date (Y-m-d format)
+     * @param string|null $endDate Optional end date (Y-m-d format)
      * @return array<int, array<string, mixed>>|WP_Error
      */
-    public function listByLocation(string $locationId)
+    public function listByLocation(string $locationId, ?string $startDate = null, ?string $endDate = null)
     {
         global $wpdb;
 
@@ -109,16 +111,42 @@ class EstimateSnapshotRepository
             return new WP_Error('bad_request', 'locationId is required', ['status' => 400]);
         }
 
+        // Build WHERE clause with date filters
+        $whereConditions = ['location_id = %s', 'deleted_at IS NULL'];
+        $params = [$locationId];
+
+        // Add date range filters if provided
+        if ($startDate) {
+            // Validate date format
+            $startTimestamp = strtotime($startDate);
+            if ($startTimestamp === false) {
+                return new WP_Error('bad_request', 'Invalid startDate format. Use Y-m-d', ['status' => 400]);
+            }
+            $whereConditions[] = 'DATE(COALESCE(created_at, updated_at)) >= %s';
+            $params[] = $startDate;
+        }
+
+        if ($endDate) {
+            // Validate date format
+            $endTimestamp = strtotime($endDate);
+            if ($endTimestamp === false) {
+                return new WP_Error('bad_request', 'Invalid endDate format. Use Y-m-d', ['status' => 400]);
+            }
+            $whereConditions[] = 'DATE(COALESCE(created_at, updated_at)) <= %s';
+            $params[] = $endDate;
+        }
+
+        $whereClause = implode(' AND ', $whereConditions);
+
         // We intentionally return a shape compatible with EstimateService::listEstimates() items.
         // CRITICAL: Filter out soft-deleted estimates
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT estimate_id, estimate_number, email, ghl_status, total, currency, created_at, updated_at
                  FROM {$this->tableName}
-                 WHERE location_id = %s
-                 AND deleted_at IS NULL
+                 WHERE {$whereClause}
                  ORDER BY COALESCE(updated_at, created_at) DESC",
-                $locationId
+                ...$params
             ),
             ARRAY_A
         );
@@ -173,6 +201,139 @@ class EstimateSnapshotRepository
         }
 
         return is_string($val) ? $val : null;
+    }
+
+    /**
+     * Get time-series data aggregated by date for chart visualization
+     * @param string $locationId
+     * @param string $startDate Start date (Y-m-d format)
+     * @param string $endDate End date (Y-m-d format)
+     * @return array<int, array{date: string, count: int, total: float}>|WP_Error
+     */
+    public function getTimeSeriesData(string $locationId, string $startDate, string $endDate)
+    {
+        global $wpdb;
+
+        if (!$locationId) {
+            return new WP_Error('bad_request', 'locationId is required', ['status' => 400]);
+        }
+
+        // Validate date formats
+        $startTimestamp = strtotime($startDate);
+        $endTimestamp = strtotime($endDate);
+        if ($startTimestamp === false || $endTimestamp === false) {
+            return new WP_Error('bad_request', 'Invalid date format. Use Y-m-d', ['status' => 400]);
+        }
+
+        // Query to aggregate estimates by date
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT 
+                    DATE(COALESCE(created_at, updated_at)) as date,
+                    COUNT(*) as count,
+                    SUM(COALESCE(total, 0)) as total
+                 FROM {$this->tableName}
+                 WHERE location_id = %s
+                 AND deleted_at IS NULL
+                 AND DATE(COALESCE(created_at, updated_at)) >= %s
+                 AND DATE(COALESCE(created_at, updated_at)) <= %s
+                 GROUP BY DATE(COALESCE(created_at, updated_at))
+                 ORDER BY date ASC",
+                $locationId,
+                $startDate,
+                $endDate
+            ),
+            ARRAY_A
+        );
+
+        if ($rows === null) {
+            return new WP_Error('db_error', 'Failed to read time-series data', [
+                'status'  => 500,
+                'details' => $wpdb->last_error,
+            ]);
+        }
+
+        // Fill in missing dates with zeros
+        $result = [];
+        $currentDate = strtotime($startDate);
+        $endDateTimestamp = strtotime($endDate);
+        $dataByDate = [];
+        
+        foreach ($rows as $row) {
+            $dataByDate[$row['date']] = [
+                'count' => (int)$row['count'],
+                'total' => (float)$row['total'],
+            ];
+        }
+
+        // Generate all dates in range
+        while ($currentDate <= $endDateTimestamp) {
+            $dateStr = date('Y-m-d', $currentDate);
+            $result[] = [
+                'date' => $dateStr,
+                'count' => $dataByDate[$dateStr]['count'] ?? 0,
+                'total' => $dataByDate[$dateStr]['total'] ?? 0.0,
+            ];
+            $currentDate = strtotime('+1 day', $currentDate);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Get full estimate data from snapshot by estimateId and locationId.
+     * Returns the parsed raw_json (100% same structure as GHL API response).
+     *
+     * @param string $estimateId
+     * @param string $locationId
+     * @return array<string, mixed>|WP_Error Returns full GHL estimate structure or WP_Error if not found
+     */
+    public function getByEstimateId(string $estimateId, string $locationId): array|WP_Error
+    {
+        global $wpdb;
+
+        if (!$estimateId) {
+            return new WP_Error('bad_request', 'estimateId is required', ['status' => 400]);
+        }
+
+        if (!$locationId) {
+            return new WP_Error('bad_request', 'locationId is required', ['status' => 400]);
+        }
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT raw_json FROM {$this->tableName}
+                 WHERE location_id = %s AND estimate_id = %s AND deleted_at IS NULL",
+                $locationId,
+                $estimateId
+            ),
+            ARRAY_A
+        );
+
+        if ($row === null) {
+            if ($wpdb->last_error) {
+                return new WP_Error('db_error', 'Failed to read snapshot', [
+                    'status'  => 500,
+                    'details' => $wpdb->last_error,
+                ]);
+            }
+            // Not found in snapshots
+            return new WP_Error('not_found', 'Estimate not found in snapshots', ['status' => 404]);
+        }
+
+        if (empty($row['raw_json'])) {
+            return new WP_Error('no_data', 'Snapshot exists but raw_json is empty', ['status' => 404]);
+        }
+
+        $decoded = json_decode($row['raw_json'], true);
+        if (!is_array($decoded)) {
+            return new WP_Error('parse_error', 'Failed to parse raw_json', [
+                'status' => 500,
+                'details' => json_last_error_msg(),
+            ]);
+        }
+
+        return $decoded;
     }
 
     /**

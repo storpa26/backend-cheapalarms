@@ -55,8 +55,8 @@ class JobLinkService
             return new WP_Error('invalid_job_uuid', 'Job UUID is required', ['status' => 400]);
         }
 
-        // Validate UUID format (basic check)
-        if (!preg_match('/^[a-zA-Z0-9\-]{36}$/', $jobUuid)) {
+        // Validate UUID format (consistent with ServiceM8Controller - allows variable length)
+        if (!preg_match('/^[a-zA-Z0-9\-]+$/', $jobUuid)) {
             return new WP_Error('invalid_uuid_format', 'Invalid UUID format', ['status' => 400]);
         }
 
