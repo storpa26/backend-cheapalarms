@@ -68,6 +68,82 @@ class StripeController extends AdminController
         return is_wp_error($adminCheck) ? $portalCheck : true;
     }
 
+    /**
+     * Calculate minimum payment amount based on invoice, deposit, and payment history
+     * 
+     * Business Rules:
+     * - First payment: Use deposit if configured, otherwise 25% of invoice or $50 (whichever is higher)
+     * - Subsequent payment: 10% of remaining balance or $50 (whichever is higher)
+     * - If remaining balance < $10: Require full remaining balance
+     * - If remaining balance < calculated minimum: Require full remaining balance
+     * - If invoice < $50: Require full payment (no partials allowed)
+     * 
+     * @param float $invoiceTotal Total invoice amount
+     * @param float $existingPaidAmount Amount already paid
+     * @param array $invoice Invoice data (contains depositRequired, depositAmount, depositType)
+     * @return float Minimum payment amount (rounded to 2 decimals)
+     */
+    private function calculateMinimumPayment(float $invoiceTotal, float $existingPaidAmount, array $invoice): float
+    {
+        // Constants
+        $MINIMUM_PAYMENT_FIRST_PERCENTAGE = 0.25; // 25% of invoice
+        $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE = 0.10; // 10% of remaining
+        $MINIMUM_ABSOLUTE_FLOOR = 50.00; // $50 AUD minimum
+        $MINIMUM_FINAL_THRESHOLD = 10.00; // If remaining < $10, require full
+
+        // Calculate remaining balance
+        $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+
+        // If invoice is very small (< $50), require full payment
+        if ($invoiceTotal < $MINIMUM_ABSOLUTE_FLOOR) {
+            return round($invoiceTotal, 2);
+        }
+
+        // If remaining balance is very small (< $10), require full remaining
+        if ($remainingBalance < $MINIMUM_FINAL_THRESHOLD) {
+            return round($remainingBalance, 2);
+        }
+
+        // Determine minimum based on payment status (first vs subsequent)
+        $isFirstPayment = ($existingPaidAmount == 0);
+
+        if ($isFirstPayment) {
+            // First payment: check for deposit requirement
+            $depositRequired = $invoice['depositRequired'] ?? false;
+            
+            if ($depositRequired) {
+                $depositType = $invoice['depositType'] ?? 'fixed';
+                $depositAmount = (float) ($invoice['depositAmount'] ?? 0);
+
+                if ($depositType === 'percentage') {
+                    // Calculate deposit from percentage of invoice total
+                    $depositAmount = ($invoiceTotal * $depositAmount) / 100;
+                }
+
+                // Deposit minimum: use deposit amount or $50, whichever is higher
+                $minimum = max($depositAmount, $MINIMUM_ABSOLUTE_FLOOR);
+            } else {
+                // No deposit: use 25% of invoice or $50, whichever is higher
+                $percentageMinimum = $invoiceTotal * $MINIMUM_PAYMENT_FIRST_PERCENTAGE;
+                $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+            }
+
+            // Cap minimum at invoice total (deposit can't exceed total)
+            $minimum = min($minimum, $invoiceTotal);
+        } else {
+            // Subsequent payment: use 10% of remaining balance or $50, whichever is higher
+            $percentageMinimum = $remainingBalance * $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE;
+            $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+        }
+
+        // Final check: if remaining balance < calculated minimum, require full remaining
+        if ($remainingBalance < $minimum) {
+            return round($remainingBalance, 2);
+        }
+
+        return round($minimum, 2);
+    }
+
     private function createPaymentIntent(WP_REST_Request $request): WP_REST_Response
     {
         $body = $request->get_json_params();
@@ -155,18 +231,48 @@ class StripeController extends AdminController
             ));
         }
 
-        // SECURITY: Validate amount against invoice total
-        // Allow partial payments (up to invoice total), but prevent overpayment
-        // Check cumulative payments if partial payments exist
+        // Calculate existing paid amount for minimum payment calculation
         $existingPaidAmount = 0;
         if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
             foreach ($meta['payment']['payments'] as $prevPayment) {
-                if (!empty($prevPayment['amount'])) {
+                // Only count successful, non-refunded payments
+                $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
+                $isRefunded = ($prevPayment['refunded'] ?? false) === true;
+                if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
                     $existingPaidAmount += (float) $prevPayment['amount'];
                 }
             }
         }
-        
+
+        // Calculate minimum payment requirement
+        $minimumPayment = $this->calculateMinimumPayment($invoiceTotal, $existingPaidAmount, $invoice);
+        $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+
+        // SECURITY: Validate amount meets minimum payment requirement
+        if ($amount < $minimumPayment) {
+            // Allow small tolerance for rounding (0.01)
+            if (abs($amount - $minimumPayment) > 0.01) {
+                return $this->respond(new WP_Error(
+                    'amount_below_minimum',
+                    sprintf(
+                        __('Payment amount must be at least %s. Minimum payment: %s', 'cheapalarms'),
+                        number_format($minimumPayment, 2),
+                        number_format($minimumPayment, 2)
+                    ),
+                    [
+                        'status' => 400,
+                        'minimumPayment' => $minimumPayment,
+                        'remainingBalance' => $remainingBalance,
+                        'invoiceTotal' => $invoiceTotal,
+                        'existingPaidAmount' => $existingPaidAmount,
+                    ]
+                ));
+            }
+        }
+
+        // SECURITY: Validate amount against invoice total
+        // Allow partial payments (up to invoice total), but prevent overpayment
+        // Note: existingPaidAmount already calculated above for minimum payment check
         $totalAfterPayment = $existingPaidAmount + $amount;
         if ($totalAfterPayment > $invoiceTotal) {
             return $this->respond(new WP_Error(

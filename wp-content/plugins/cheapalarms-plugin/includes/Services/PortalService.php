@@ -308,6 +308,48 @@ class PortalService
             }
         }
 
+        // Calculate minimum payment info for invoice (if invoice exists)
+        $minimumPaymentInfo = null;
+        $invoice = $meta['invoice'] ?? null;
+        $payment = $meta['payment'] ?? null;
+        
+        if ($invoice) {
+            // Get invoice total
+            $invoiceTotal = null;
+            if (isset($invoice['ghl']['total'])) {
+                $invoiceTotal = (float) $invoice['ghl']['total'];
+            } elseif (isset($invoice['total'])) {
+                $invoiceTotal = (float) $invoice['total'];
+            }
+
+            if ($invoiceTotal !== null && $invoiceTotal > 0) {
+                // Calculate existing paid amount (excluding refunded payments)
+                $existingPaidAmount = 0;
+                if (!empty($payment['payments']) && is_array($payment['payments'])) {
+                    foreach ($payment['payments'] as $prevPayment) {
+                        $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
+                        $isRefunded = ($prevPayment['refunded'] ?? false) === true;
+                        if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
+                            $existingPaidAmount += (float) $prevPayment['amount'];
+                        }
+                    }
+                }
+
+                // Calculate minimum payment using same logic as StripeController
+                $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
+                $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+                $isFirstPayment = ($existingPaidAmount == 0);
+
+                $minimumPaymentInfo = [
+                    'minimumPayment' => $minimumPayment,
+                    'remainingBalance' => $remainingBalance,
+                    'isFirstPayment' => $isFirstPayment,
+                    'invoiceTotal' => $invoiceTotal,
+                    'existingPaidAmount' => $existingPaidAmount,
+                ];
+            }
+        }
+
         return [
             'estimateId'   => $estimateId,
             'locationId'   => $locationId, // Include locationId so frontend can use it for GHL sync
@@ -321,6 +363,7 @@ class PortalService
             'booking'     => $meta['booking'] ?? null, // Include booking data for customer portal
             'payment'     => $meta['payment'] ?? null, // Include payment data for customer portal
             'revision'     => $meta['revision'] ?? null, // Include revision data for customer portal
+            'minimumPaymentInfo' => $minimumPaymentInfo, // Include minimum payment calculation for frontend
             'isGuestMode'  => $isGuestMode,
             'daysRemaining' => $daysRemaining,
             'canCreateAccount' => $isGuestMode, // Guests can always create account
@@ -1655,12 +1698,71 @@ class PortalService
             // SECURITY: xeroInvoiceId is already validated as it comes from invoice meta linked to this estimate
             // The invoice was retrieved above and belongs to this estimateId, so xeroInvoiceId is safe
             $xeroInvoiceId = $invoice['xeroInvoiceId'] ?? null;
+            $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
             
-            if ($xeroInvoiceId) {
-                $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+            // Only attempt Xero sync if Xero is connected
+            if ($xeroService->isConnected()) {
+                // If xeroInvoiceId is missing, try to find invoice in Xero by invoice number
+                if (empty($xeroInvoiceId)) {
+                    $invoiceNumber = $invoice['invoiceNumber'] ?? $invoice['number'] ?? null;
+                    
+                    if ($invoiceNumber) {
+                        $this->logger->info('xeroInvoiceId missing, attempting to find invoice in Xero by invoice number', [
+                            'estimateId' => $estimateId,
+                            'invoiceNumber' => $invoiceNumber,
+                        ]);
+                        
+                        $findResult = $xeroService->findInvoiceByNumber($invoiceNumber);
+                        
+                        if (!is_wp_error($findResult) && !empty($findResult['invoiceId'])) {
+                            // Found invoice in Xero - update meta and use it
+                            $xeroInvoiceId = $findResult['invoiceId'];
+                            $invoiceMeta['xeroInvoiceId'] = $xeroInvoiceId;
+                            $invoiceMeta['xeroInvoiceNumber'] = $findResult['invoiceNumber'] ?? $invoiceNumber;
+                            
+                            // Update meta to store Xero invoice ID
+                            $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                            
+                            $this->logger->info('Found invoice in Xero, updating meta', [
+                                'estimateId' => $estimateId,
+                                'xeroInvoiceId' => $xeroInvoiceId,
+                                'invoiceNumber' => $invoiceNumber,
+                            ]);
+                        } else {
+                            // Invoice not found in Xero - try to sync it first
+                            $this->logger->info('Invoice not found in Xero, attempting to sync invoice first', [
+                                'estimateId' => $estimateId,
+                                'invoiceNumber' => $invoiceNumber,
+                                'ghlInvoiceId' => $invoice['id'] ?? null,
+                            ]);
+                            
+                            // Try to sync invoice to Xero (non-blocking)
+                            if (!empty($invoice['id']) && $locationId) {
+                                $this->syncInvoiceToXero($estimateId, $invoice['id'], $locationId);
+                                
+                                // After sync, check if xeroInvoiceId was stored
+                                $updatedMeta = $this->getMeta($estimateId);
+                                $updatedInvoiceMeta = $updatedMeta['invoice'] ?? [];
+                                $xeroInvoiceId = $updatedInvoiceMeta['xeroInvoiceId'] ?? null;
+                                
+                                if ($xeroInvoiceId) {
+                                    $this->logger->info('Invoice synced to Xero, proceeding with payment sync', [
+                                        'estimateId' => $estimateId,
+                                        'xeroInvoiceId' => $xeroInvoiceId,
+                                    ]);
+                                } else {
+                                    $this->logger->warning('Invoice sync initiated but xeroInvoiceId not available yet, payment sync will be skipped', [
+                                        'estimateId' => $estimateId,
+                                        'invoiceNumber' => $invoiceNumber,
+                                    ]);
+                                }
+                            }
+                        }
+                    }
+                }
                 
-                // Check if Xero is connected
-                if ($xeroService->isConnected()) {
+                // Sync payment to Xero if we have xeroInvoiceId
+                if ($xeroInvoiceId) {
                     $paymentMethod = $payment['provider'] === 'stripe' ? 'Stripe' : ($payment['provider'] ?? 'Manual');
                     $transactionId = $payment['transactionId'] ?? '';
                     
@@ -1682,16 +1784,24 @@ class PortalService
                             'error' => $xeroPaymentResult->get_error_message(),
                         ]);
                     } else {
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        $this->logger->info('Payment recorded in Xero', [
-                            'estimateId' => $estimateId,
-                            'xeroInvoiceId' => $xeroInvoiceId,
-                            'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
-                            'amount' => $amount,
-                        ]);
-                    }
+                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                            $this->logger->info('Payment recorded in Xero', [
+                                'estimateId' => $estimateId,
+                                'xeroInvoiceId' => $xeroInvoiceId,
+                                'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
+                                'amount' => $amount,
+                            ]);
+                        }
                     }
                 } else {
+                    $this->logger->info('Payment not synced to Xero - invoice not found in Xero and sync not available', [
+                        'estimateId' => $estimateId,
+                        'invoiceNumber' => $invoice['invoiceNumber'] ?? $invoice['number'] ?? null,
+                    ]);
+                }
+            } else {
+                // Xero not connected - log if xeroInvoiceId exists (inconsistent state)
+                if ($xeroInvoiceId) {
                     $this->logger->warning('Xero invoice ID exists but Xero is not connected', [
                         'estimateId' => $estimateId,
                         'xeroInvoiceId' => $xeroInvoiceId,
@@ -2960,14 +3070,14 @@ class PortalService
 
     /**
      * Auto-sync invoice to Xero (non-blocking)
-     * Called automatically when GHL invoice is created
+     * Called automatically when GHL invoice is created or during retry
      * 
      * @param string $estimateId Estimate ID
      * @param string $ghlInvoiceId GHL invoice ID
      * @param string $locationId Location ID
      * @return void
      */
-    private function syncInvoiceToXero(string $estimateId, string $ghlInvoiceId, string $locationId): void
+    public function syncInvoiceToXero(string $estimateId, string $ghlInvoiceId, string $locationId): void
     {
         // Use lock to prevent concurrent sync attempts
         $lockKey = 'ca_xero_sync_lock_' . $estimateId;
@@ -3140,21 +3250,47 @@ class PortalService
                     }
                 }
                 
-                // Store error
+                // Update status with error message and retry logic
+                $retryCount = ($xeroSync['retryCount'] ?? 0) + 1;
+                $maxRetries = 3;
+                
+                // Check if we should retry (transient errors) or fail permanently (validation errors)
+                $isTransientError = $this->isTransientXeroError($xeroResult);
+                $shouldRetry = $isTransientError && $retryCount < $maxRetries;
+                
                 $invoiceMeta['xeroSync'] = [
-                    'status' => 'failed',
+                    'status' => $shouldRetry ? 'pending' : 'failed',
                     'attemptedAt' => current_time('mysql'),
                     'error' => $errorMessage,
-                    'retryCount' => ($xeroSync['retryCount'] ?? 0) + 1,
+                    'retryCount' => $retryCount,
+                    'lastError' => $errorMessage,
+                    'lastErrorCode' => $errorCode,
                 ];
                 $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
                 
-                $this->logger->error('Xero auto-sync failed', [
-                    'estimateId' => $estimateId,
-                    'ghlInvoiceId' => $ghlInvoiceId,
-                    'error' => $errorMessage,
-                    'errorCode' => $errorCode,
-                ]);
+                // Schedule retry if applicable
+                if ($shouldRetry) {
+                    $this->scheduleXeroSyncRetry($estimateId, $ghlInvoiceId, $locationId, $retryCount);
+                    
+                    $this->logger->warning('Xero auto-sync failed, retry scheduled', [
+                        'estimateId' => $estimateId,
+                        'ghlInvoiceId' => $ghlInvoiceId,
+                        'error' => $errorMessage,
+                        'errorCode' => $errorCode,
+                        'retryCount' => $retryCount,
+                        'nextRetryIn' => $this->getRetryDelay($retryCount) . ' seconds',
+                    ]);
+                } else {
+                    $this->logger->error('Xero auto-sync failed permanently', [
+                        'estimateId' => $estimateId,
+                        'ghlInvoiceId' => $ghlInvoiceId,
+                        'error' => $errorMessage,
+                        'errorCode' => $errorCode,
+                        'retryCount' => $retryCount,
+                        'isTransient' => $isTransientError,
+                    ]);
+                }
+                
                 delete_transient($lockKey);
                 return;
             }
@@ -3183,23 +3319,165 @@ class PortalService
             $invoiceMeta = $meta['invoice'] ?? [];
             $xeroSync = $invoiceMeta['xeroSync'] ?? [];
             
+            $retryCount = ($xeroSync['retryCount'] ?? 0) + 1;
+            $maxRetries = 3;
+            
+            // Exceptions are typically transient (network, timeout, etc.)
+            $isTransientError = true;
+            $shouldRetry = $retryCount < $maxRetries;
+            
             $invoiceMeta['xeroSync'] = [
-                'status' => 'failed',
+                'status' => $shouldRetry ? 'pending' : 'failed',
                 'attemptedAt' => current_time('mysql'),
                 'error' => 'Unexpected error: ' . $e->getMessage(),
-                'retryCount' => ($xeroSync['retryCount'] ?? 0) + 1,
+                'retryCount' => $retryCount,
+                'lastError' => 'Unexpected error: ' . $e->getMessage(),
+                'lastErrorCode' => 'exception',
             ];
             $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
             
-            $this->logger->error('Xero auto-sync failed with exception', [
-                'estimateId' => $estimateId,
-                'ghlInvoiceId' => $ghlInvoiceId,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            // Schedule retry if applicable
+            if ($shouldRetry) {
+                $this->scheduleXeroSyncRetry($estimateId, $ghlInvoiceId, $locationId, $retryCount);
+                
+                $this->logger->warning('Xero auto-sync failed with exception, retry scheduled', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                    'exception' => $e->getMessage(),
+                    'retryCount' => $retryCount,
+                    'nextRetryIn' => $this->getRetryDelay($retryCount) . ' seconds',
+                ]);
+            } else {
+                $this->logger->error('Xero auto-sync failed with exception permanently', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                    'exception' => $e->getMessage(),
+                    'retryCount' => $retryCount,
+                ]);
+            }
         } finally {
             // Always release lock
             delete_transient($lockKey);
+        }
+    }
+
+    /**
+     * Check if Xero error is transient (should be retried)
+     * 
+     * @param \WP_Error $error Error object
+     * @return bool True if error is transient and should be retried
+     */
+    private function isTransientXeroError(\WP_Error $error): bool
+    {
+        $errorCode = $error->get_error_code();
+        $errorMessage = strtolower($error->get_error_message());
+        $errorData = $error->get_error_data();
+        $httpCode = is_array($errorData) ? ($errorData['status'] ?? null) : null;
+        
+        // Permanent errors (don't retry)
+        $permanentErrors = [
+            'missing_sales_account',
+            'missing_bank_account',
+            'duplicate_invoice', // Already handled separately
+            'invoice_creation_failed', // Could be validation error
+            'contact_creation_failed', // Could be validation error
+        ];
+        
+        if (in_array($errorCode, $permanentErrors)) {
+            return false;
+        }
+        
+        // Transient errors (should retry)
+        $transientIndicators = [
+            'connection',
+            'timeout',
+            'ssl',
+            'network',
+            'temporary',
+            'rate limit',
+            'too many requests',
+            'server error',
+            'service unavailable',
+            'bad gateway',
+            'gateway timeout',
+        ];
+        
+        foreach ($transientIndicators as $indicator) {
+            if (stripos($errorMessage, $indicator) !== false) {
+                return true;
+            }
+        }
+        
+        // HTTP 5xx errors are typically transient
+        if ($httpCode && $httpCode >= 500 && $httpCode < 600) {
+            return true;
+        }
+        
+        // HTTP 429 (rate limit) is transient
+        if ($httpCode === 429) {
+            return true;
+        }
+        
+        // Default: assume validation errors are permanent, API errors might be transient
+        // For safety, only retry if it's clearly a server/network error
+        return false;
+    }
+
+    /**
+     * Get retry delay in seconds (exponential backoff)
+     * 
+     * @param int $retryCount Current retry attempt (1-indexed)
+     * @return int Delay in seconds
+     */
+    private function getRetryDelay(int $retryCount): int
+    {
+        // Exponential backoff: 1 hour, 4 hours, 24 hours
+        $delays = [
+            1 => 3600,      // 1 hour
+            2 => 14400,     // 4 hours
+            3 => 86400,     // 24 hours
+        ];
+        
+        return $delays[$retryCount] ?? 86400; // Default to 24 hours
+    }
+
+    /**
+     * Schedule Xero sync retry using WordPress cron
+     * 
+     * @param string $estimateId Estimate ID
+     * @param string $ghlInvoiceId GHL invoice ID
+     * @param string $locationId Location ID
+     * @param int $retryCount Current retry attempt
+     * @return void
+     */
+    private function scheduleXeroSyncRetry(string $estimateId, string $ghlInvoiceId, string $locationId, int $retryCount): void
+    {
+        $delay = $this->getRetryDelay($retryCount);
+        $hookName = 'ca_retry_xero_sync';
+        
+        // Cancel any existing scheduled retry for this estimate
+        $existingScheduled = wp_next_scheduled($hookName, [$estimateId]);
+        if ($existingScheduled) {
+            wp_unschedule_event($existingScheduled, $hookName, [$estimateId]);
+        }
+        
+        // Schedule new retry
+        $scheduled = wp_schedule_single_event(time() + $delay, $hookName, [$estimateId, $ghlInvoiceId, $locationId]);
+        
+        if ($scheduled === false) {
+            $this->logger->warning('Failed to schedule Xero sync retry', [
+                'estimateId' => $estimateId,
+                'ghlInvoiceId' => $ghlInvoiceId,
+                'retryCount' => $retryCount,
+                'delay' => $delay,
+            ]);
+        } else {
+            $this->logger->info('Xero sync retry scheduled', [
+                'estimateId' => $estimateId,
+                'ghlInvoiceId' => $ghlInvoiceId,
+                'retryCount' => $retryCount,
+                'scheduledFor' => date('Y-m-d H:i:s', time() + $delay),
+            ]);
         }
     }
 
@@ -4931,6 +5209,82 @@ class PortalService
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Calculate minimum payment amount based on invoice, deposit, and payment history
+     * 
+     * Business Rules:
+     * - First payment: Use deposit if configured, otherwise 25% of invoice or $50 (whichever is higher)
+     * - Subsequent payment: 10% of remaining balance or $50 (whichever is higher)
+     * - If remaining balance < $10: Require full remaining balance
+     * - If remaining balance < calculated minimum: Require full remaining balance
+     * - If invoice < $50: Require full payment (no partials allowed)
+     * 
+     * @param float $invoiceTotal Total invoice amount
+     * @param float $existingPaidAmount Amount already paid
+     * @param array $invoice Invoice data (contains depositRequired, depositAmount, depositType)
+     * @return float Minimum payment amount (rounded to 2 decimals)
+     */
+    private function calculateMinimumPaymentForInvoice(float $invoiceTotal, float $existingPaidAmount, array $invoice): float
+    {
+        // Constants
+        $MINIMUM_PAYMENT_FIRST_PERCENTAGE = 0.25; // 25% of invoice
+        $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE = 0.10; // 10% of remaining
+        $MINIMUM_ABSOLUTE_FLOOR = 50.00; // $50 AUD minimum
+        $MINIMUM_FINAL_THRESHOLD = 10.00; // If remaining < $10, require full
+
+        // Calculate remaining balance
+        $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+
+        // If invoice is very small (< $50), require full payment
+        if ($invoiceTotal < $MINIMUM_ABSOLUTE_FLOOR) {
+            return round($invoiceTotal, 2);
+        }
+
+        // If remaining balance is very small (< $10), require full remaining
+        if ($remainingBalance < $MINIMUM_FINAL_THRESHOLD) {
+            return round($remainingBalance, 2);
+        }
+
+        // Determine minimum based on payment status (first vs subsequent)
+        $isFirstPayment = ($existingPaidAmount == 0);
+
+        if ($isFirstPayment) {
+            // First payment: check for deposit requirement
+            $depositRequired = $invoice['depositRequired'] ?? false;
+            
+            if ($depositRequired) {
+                $depositType = $invoice['depositType'] ?? 'fixed';
+                $depositAmount = (float) ($invoice['depositAmount'] ?? 0);
+
+                if ($depositType === 'percentage') {
+                    // Calculate deposit from percentage of invoice total
+                    $depositAmount = ($invoiceTotal * $depositAmount) / 100;
+                }
+
+                // Deposit minimum: use deposit amount or $50, whichever is higher
+                $minimum = max($depositAmount, $MINIMUM_ABSOLUTE_FLOOR);
+            } else {
+                // No deposit: use 25% of invoice or $50, whichever is higher
+                $percentageMinimum = $invoiceTotal * $MINIMUM_PAYMENT_FIRST_PERCENTAGE;
+                $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+            }
+
+            // Cap minimum at invoice total (deposit can't exceed total)
+            $minimum = min($minimum, $invoiceTotal);
+        } else {
+            // Subsequent payment: use 10% of remaining balance or $50, whichever is higher
+            $percentageMinimum = $remainingBalance * $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE;
+            $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+        }
+
+        // Final check: if remaining balance < calculated minimum, require full remaining
+        if ($remainingBalance < $minimum) {
+            return round($remainingBalance, 2);
+        }
+
+        return round($minimum, 2);
     }
 
     /**

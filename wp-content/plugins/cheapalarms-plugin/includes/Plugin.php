@@ -220,6 +220,22 @@ class Plugin
             wp_schedule_single_event(time() + 1, 'ca_retry_failed_webhooks');
         });
 
+        // Register Xero sync retry handler
+        add_action('ca_retry_xero_sync', function (string $estimateId, string $ghlInvoiceId, string $locationId) {
+            try {
+                $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
+                // syncInvoiceToXero is now public, can call directly
+                $portalService->syncInvoiceToXero($estimateId, $ghlInvoiceId, $locationId);
+            } catch (\Exception $e) {
+                $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                $logger->error('Failed to execute Xero sync retry', [
+                    'estimateId' => $estimateId,
+                    'ghlInvoiceId' => $ghlInvoiceId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }, 10, 3);
+
         $this->registerCors();
         $this->registerRestEndpoints();
         $this->registerFrontend();

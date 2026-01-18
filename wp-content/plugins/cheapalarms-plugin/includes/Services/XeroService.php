@@ -1192,6 +1192,53 @@ class XeroService
     }
 
     /**
+     * Find invoice in Xero by invoice number
+     * 
+     * @param string $invoiceNumber Invoice number to search for
+     * @return array|WP_Error Returns invoice data with 'invoiceId' and 'invoiceNumber', or WP_Error if not found
+     */
+    public function findInvoiceByNumber(string $invoiceNumber): array|WP_Error
+    {
+        if (empty($invoiceNumber)) {
+            return new WP_Error('missing_invoice_number', __('Invoice number is required.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Validate and sanitize invoice number (same logic as createInvoice)
+        $invoiceNumber = trim($invoiceNumber);
+        if (strlen($invoiceNumber) > 50) {
+            $invoiceNumber = substr($invoiceNumber, 0, 50);
+        }
+        $invoiceNumber = preg_replace('/[^a-zA-Z0-9\-_]/', '', $invoiceNumber);
+        
+        if (empty($invoiceNumber)) {
+            return new WP_Error('invalid_invoice_number', __('Invalid invoice number format.', 'cheapalarms'), ['status' => 400]);
+        }
+
+        // Escape for OData query
+        $escapedNumber = str_replace('"', '""', $invoiceNumber);
+        $whereClause = 'InvoiceNumber="' . $escapedNumber . '"';
+        
+        $result = $this->makeRequest('GET', '/Invoices?where=' . urlencode($whereClause));
+        
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        if (empty($result['Invoices']) || !is_array($result['Invoices'])) {
+            return new WP_Error('invoice_not_found', __('Invoice not found in Xero.', 'cheapalarms'), ['status' => 404]);
+        }
+
+        $invoice = $result['Invoices'][0];
+        
+        return [
+            'ok' => true,
+            'invoiceId' => $invoice['InvoiceID'] ?? null,
+            'invoiceNumber' => $invoice['InvoiceNumber'] ?? null,
+            'invoice' => $invoice,
+        ];
+    }
+
+    /**
      * Record payment in Xero
      * 
      * @param string $invoiceId Xero invoice ID

@@ -160,10 +160,12 @@ class XeroController extends AdminController
     private function getStatus(WP_REST_Request $request): WP_REST_Response
     {
         $isConnected = $this->xeroService->isConnected();
+        $tenantId = $isConnected ? get_option('ca_xero_tenant_id') : null;
 
         return $this->respond([
             'ok' => true,
             'connected' => $isConnected,
+            'tenantId' => $tenantId ?: null,
         ]);
     }
 

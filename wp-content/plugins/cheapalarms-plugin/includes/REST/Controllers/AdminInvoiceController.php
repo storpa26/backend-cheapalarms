@@ -350,6 +350,14 @@ class AdminInvoiceController extends AdminController
         $calculatedAmountDue = $invoice['amountDue'] ?? $invoice['total'] ?? 0;
         $calculatedStatus = $invoice['status'] ?? 'draft';
         
+        // Initialize payments array (start with GHL payments)
+        $payments = $invoice['payments'] ?? [];
+        
+        // Initialize Xero fields
+        $xeroInvoiceId = null;
+        $xeroInvoiceNumber = null;
+        $xeroSync = null;
+        
         if ($linkedEstimateId) {
             // Get basic estimate info from portal meta
             $meta = $this->getPortalMeta($linkedEstimateId);
@@ -373,6 +381,19 @@ class AdminInvoiceController extends AdminController
                 if (isset($meta['invoice']['status'])) {
                     $calculatedStatus = $meta['invoice']['status'];
                 }
+                
+                // CRITICAL FIX: Get payments from portal meta (Stripe payments stored here)
+                // Portal meta payments take precedence over GHL payments
+                if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
+                    // Use portal meta payments as source of truth (includes all Stripe payments)
+                    $payments = $meta['payment']['payments'];
+                }
+                
+                // Extract Xero fields from portal meta
+                $invoiceMeta = $meta['invoice'] ?? [];
+                $xeroInvoiceId = $invoiceMeta['xeroInvoiceId'] ?? null;
+                $xeroInvoiceNumber = $invoiceMeta['xeroInvoiceNumber'] ?? null;
+                $xeroSync = $invoiceMeta['xeroSync'] ?? null;
             }
         }
 
@@ -395,9 +416,12 @@ class AdminInvoiceController extends AdminController
             'dueDate'       => $invoice['dueDate'] ?? null,
             'createdAt'     => $invoice['createdAt'] ?? '',
             'updatedAt'     => $invoice['updatedAt'] ?? '',
-            'payments'      => $invoice['payments'] ?? [],
+            'payments'      => $payments, // Now includes Stripe payments from portal meta
             'linkedEstimate' => $linkedEstimate,
             'linkedEstimateId' => $linkedEstimateId, // Also return ID directly for easier access
+            'xeroInvoiceId' => $xeroInvoiceId, // Xero invoice ID from portal meta
+            'xeroInvoiceNumber' => $xeroInvoiceNumber, // Xero invoice number from portal meta
+            'xeroSync' => $xeroSync, // Xero sync status, errors, retry info
         ]);
     }
 
