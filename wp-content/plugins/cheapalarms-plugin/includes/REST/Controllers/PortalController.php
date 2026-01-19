@@ -112,39 +112,13 @@ class PortalController implements ControllerInterface
                         return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                     }
                     
-                    // Force refresh of current user - clear cache to ensure JWT filter has run
-                    global $current_user;
-                    $current_user = null;
+                    // FIX: Use Authenticator's ensureUserLoaded() to properly trigger JWT authentication
+                    // This ensures determine_current_user filter runs at priority 1 (before cookie auth)
+                    // and processes JWT cookies before cookie auth can interfere
+                    $this->auth->ensureUserLoaded();
                     
-                    // Try to get user again
+                    // Get the user - should be authenticated if JWT cookie exists
                     $user = wp_get_current_user();
-                    
-                    // If still no user, manually check for JWT token and authenticate
-                    if (!$user || 0 === $user->ID) {
-                        // Check if Authorization header exists
-                        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-                        if (!$authHeader && function_exists('apache_request_headers')) {
-                            $headers = apache_request_headers();
-                            $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
-                        }
-                        
-                        // Also check cookies for JWT token
-                        $token = null;
-                        if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                            $token = trim(substr($authHeader, 7));
-                        } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
-                            $token = $_COOKIE['ca_jwt'];
-                        }
-                        
-                        if ($token) {
-                            // Token exists - manually trigger determine_current_user filter
-                            $userId = apply_filters('determine_current_user', 0);
-                            if ($userId > 0) {
-                                wp_set_current_user($userId);
-                                $user = wp_get_current_user();
-                            }
-                        }
-                    }
                     
                     // If user is authenticated, allow access
                     if ($user && $user->ID > 0) {

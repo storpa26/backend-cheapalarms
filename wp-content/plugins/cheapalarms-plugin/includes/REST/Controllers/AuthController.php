@@ -166,20 +166,21 @@ class AuthController implements ControllerInterface
      */
     public function checkAuthentication(): bool|WP_Error
     {
-        $userId = get_current_user_id();
-        if ($userId > 0) {
-            return true;
-        }
-
-        // Workaround: manually trigger JWT resolution
-        global $current_user;
-        $current_user = null;
-        $userId = (int) apply_filters('determine_current_user', 0);
-        if ($userId > 0) {
+        // ADD THIS LOG
+        error_log('[AUTH_CHECK] Starting authentication check');
+        
+        // FIX: Directly authenticate via JWT token, bypassing filter system
+        // This ensures JWT authentication works reliably without filter conflicts
+        $userId = $this->authenticator->authenticateViaJwt();
+        
+        if ($userId && $userId > 0) {
+            // Set the current user to ensure context persists
             wp_set_current_user($userId);
+            error_log('[AUTH_CHECK] Authentication SUCCESS - userId: ' . $userId);
             return true;
         }
 
+        error_log('[AUTH_CHECK] Authentication FAILED - returning 401 (userId: ' . ($userId ?? 'null') . ')');
         return new WP_Error(
             'rest_forbidden',
             __('Authentication required.', 'cheapalarms'),
@@ -192,13 +193,22 @@ class AuthController implements ControllerInterface
      */
     public function getCurrentUser(WP_REST_Request $request): WP_REST_Response
     {
+        // TEMPORARY DEBUG LOGGING
+        error_log('[AUTH_ME] HTTP_COOKIE: ' . ($_SERVER['HTTP_COOKIE'] ?? 'NOT SET'));
+        error_log('[AUTH_ME] $_COOKIE[ca_jwt]: ' . (isset($_COOKIE['ca_jwt']) ? 'SET (length: ' . strlen($_COOKIE['ca_jwt']) . ')' : 'NOT SET'));
+        error_log('[AUTH_ME] HTTP_AUTHORIZATION: ' . ($_SERVER['HTTP_AUTHORIZATION'] ?? 'NOT SET'));
+        error_log('[AUTH_ME] Current user ID before check: ' . get_current_user_id());
+        
         $user = wp_get_current_user();
         if (!$user || 0 === $user->ID) {
+            error_log('[AUTH_ME] User not found - current_user_id: ' . get_current_user_id());
             return new WP_REST_Response([
                 'ok' => false,
                 'err' => 'User not found',
             ], 401);
         }
+        
+        error_log('[AUTH_ME] User authenticated - ID: ' . $user->ID);
 
         $roles = $user->roles ?? [];
 

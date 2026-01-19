@@ -6,6 +6,7 @@ use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\REST\Controllers\Base\AdminController;
 use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\InvoiceService;
+use CheapAlarms\Plugin\Services\PortalService;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -15,12 +16,14 @@ use function sanitize_text_field;
 class AdminInvoiceController extends AdminController
 {
     private InvoiceService $invoiceService;
+    private PortalService $portalService;
     private Authenticator $auth;
 
     public function __construct(Container $container)
     {
         parent::__construct($container);
         $this->invoiceService = $this->container->get(InvoiceService::class);
+        $this->portalService  = $this->container->get(PortalService::class);
         $this->auth           = $this->container->get(Authenticator::class);
     }
 
@@ -465,6 +468,38 @@ class AdminInvoiceController extends AdminController
         $result = $this->invoiceService->sendInvoice($invoiceId, $locationId, $options);
         if (is_wp_error($result)) {
             return $this->respond($result);
+        }
+
+        // Auto-sync invoice to Xero if connected and not already synced (non-blocking)
+        // Find linked estimate ID from invoice metadata
+        $linkedEstimateId = null;
+        $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+        
+        // Search for estimate linked to this invoice
+        global $wpdb;
+        $metaRows = $wpdb->get_results($wpdb->prepare(
+            "SELECT option_name, option_value FROM {$wpdb->options} 
+            WHERE option_name LIKE %s",
+            'ca_portal_meta_%'
+        ));
+        
+        foreach ($metaRows as $row) {
+            $meta = json_decode($row->option_value, true);
+            if (is_array($meta) && isset($meta['invoice']['id']) && $meta['invoice']['id'] === $invoiceId) {
+                // Extract estimate ID from option_name (format: ca_portal_meta_{estimateId})
+                $linkedEstimateId = str_replace('ca_portal_meta_', '', $row->option_name);
+                break;
+            }
+        }
+        
+        // Trigger Xero sync if estimate found and invoice not already synced
+        if ($linkedEstimateId) {
+            $meta = $portalMetaRepo->get($linkedEstimateId);
+            $invoiceMeta = $meta['invoice'] ?? [];
+            // Only sync if not already synced
+            if (empty($invoiceMeta['xeroInvoiceId'])) {
+                $this->portalService->syncInvoiceToXero($linkedEstimateId, $invoiceId, $locationId);
+            }
         }
 
         return $this->respond([

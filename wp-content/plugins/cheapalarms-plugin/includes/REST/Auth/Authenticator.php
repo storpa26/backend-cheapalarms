@@ -37,7 +37,9 @@ class Authenticator
 
     public function boot(): void
     {
-        add_filter('determine_current_user', [$this, 'determineCurrentUser'], 15);
+        // FIX: Priority 1 ensures JWT auth runs BEFORE WordPress core cookie auth (priority 10)
+        // This prevents cookie auth from overriding JWT tokens and causing intermittent 401 errors
+        add_filter('determine_current_user', [$this, 'determineCurrentUser'], 1);
         add_filter('rest_authentication_errors', [$this, 'restAuthenticationErrors']);
     }
 
@@ -57,6 +59,31 @@ class Authenticator
         global $current_user;
         $current_user = null;
         wp_get_current_user();
+    }
+
+    /**
+     * Directly authenticate via JWT token and return user ID
+     * This bypasses the filter system to ensure the user is authenticated
+     */
+    public function authenticateViaJwt(): ?int
+    {
+        $token = $this->getBearerToken();
+        if (!$token) {
+            return null;
+        }
+
+        $decoded = $this->decodeJwt($token);
+        if (is_wp_error($decoded)) {
+            return null;
+        }
+
+        $userIdFromToken = (int) ($decoded['sub'] ?? 0);
+        $user = get_user_by('id', $userIdFromToken);
+        if (!$user instanceof WP_User) {
+            return null;
+        }
+
+        return $user->ID;
     }
 
     public function requireCapability(string $capability): bool|WP_Error
@@ -279,25 +306,60 @@ class Authenticator
 
     public function determineCurrentUser($userId)
     {
-        if ($userId || !defined('REST_REQUEST') || !REST_REQUEST) {
+        // Check if this is a REST API request (either by constant or by request URI)
+        $isRestRequest = (defined('REST_REQUEST') && REST_REQUEST) 
+            || (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/wp-json/') !== false);
+        
+        // DEBUG: Log REST request detection
+        if (function_exists('error_log') && $isRestRequest) {
+            error_log('[JWT_AUTH] REST request detected - REST_REQUEST: ' . (defined('REST_REQUEST') ? (REST_REQUEST ? 'true' : 'false') : 'not defined') . ', URI: ' . ($_SERVER['REQUEST_URI'] ?? 'not set'));
+        }
+        
+        // For non-REST requests, return early (normal WordPress behavior)
+        if (!$isRestRequest) {
             return $userId;
         }
 
+        // Always check for JWT token in REST requests, even if $userId is already set
+        // This ensures server-to-server requests from Next.js get authenticated correctly
         $token = $this->getBearerToken();
         if (!$token) {
-            return $userId;
+            if (function_exists('error_log')) {
+                error_log('[JWT_AUTH] No JWT token found, returning existing userId: ' . $userId);
+            }
+            return $userId; // No JWT token, return existing userId (might be from cookie auth)
+        }
+        
+        if (function_exists('error_log')) {
+            error_log('[JWT_AUTH] JWT token found, length: ' . strlen($token) . ', existing userId: ' . $userId);
         }
 
+        // JWT token exists - verify it and use it (overrides any existing userId)
         $decoded = $this->decodeJwt($token);
         if (is_wp_error($decoded)) {
+            if (function_exists('error_log')) {
+                error_log('[JWT_AUTH] Token decode FAILED: ' . $decoded->get_error_message() . ' (code: ' . $decoded->get_error_code() . ')');
+            }
             $this->lastAuthError = $decoded;
+            return 0; // JWT invalid, return 0 to force re-authentication
+        }
+
+        if (function_exists('error_log')) {
+            error_log('[JWT_AUTH] Token decoded successfully, user ID from token: ' . ($decoded['sub'] ?? 'NOT SET'));
+        }
+
+        $userIdFromToken = (int) ($decoded['sub'] ?? 0);
+        $user = get_user_by('id', $userIdFromToken);
+        if (!$user instanceof WP_User) {
+            if (function_exists('error_log')) {
+                error_log('[JWT_AUTH] User lookup FAILED for ID: ' . $userIdFromToken);
+            }
+            $this->lastAuthError = new WP_Error('invalid_token', __('User no longer exists.', 'cheapalarms'), ['status' => 401]);
             return 0;
         }
 
-        $user = get_user_by('id', (int) ($decoded['sub'] ?? 0));
-        if (!$user instanceof WP_User) {
-            $this->lastAuthError = new WP_Error('invalid_token', __('User no longer exists.', 'cheapalarms'), ['status' => 401]);
-            return 0;
+        if (function_exists('error_log')) {
+            error_log('[JWT_AUTH] User authenticated successfully, ID: ' . $user->ID);
         }
 
         wp_set_current_user($user->ID);
@@ -419,8 +481,47 @@ class Authenticator
 
         // Fallback: check cookies for JWT token (for httpOnly cookies)
         $cookieName = 'ca_jwt';
+        
+        // Check $_COOKIE first (normal browser requests)
         if (isset($_COOKIE[$cookieName]) && !empty($_COOKIE[$cookieName])) {
             return $_COOKIE[$cookieName];
+        }
+        
+        // FIX: Also check Cookie header for server-to-server requests (e.g., from getAuthContext)
+        // When Next.js makes server-side fetch, cookies are in HTTP_COOKIE header, not $_COOKIE
+        $cookieHeader = $_SERVER['HTTP_COOKIE'] ?? null;
+        if ($cookieHeader) {
+            if (function_exists('error_log')) {
+                error_log('[JWT_AUTH] Cookie header found, length: ' . strlen($cookieHeader));
+            }
+            // Parse cookies from header (format: "name1=value1; name2=value2")
+            $cookies = [];
+            $pairs = explode(';', $cookieHeader);
+            foreach ($pairs as $pair) {
+                $pair = trim($pair);
+                if (empty($pair)) {
+                    continue;
+                }
+                $parts = explode('=', $pair, 2);
+                if (count($parts) === 2) {
+                    // FIX: URL decode cookie value (cookies in headers may be URL-encoded)
+                    // Use different variable name to avoid overwriting $cookieName ('ca_jwt')
+                    $parsedCookieName = trim($parts[0]);
+                    $cookieValue = urldecode(trim($parts[1]));
+                    $cookies[$parsedCookieName] = $cookieValue;
+                }
+            }
+            // Check for 'ca_jwt' cookie (using original $cookieName variable)
+            if (isset($cookies[$cookieName]) && !empty($cookies[$cookieName])) {
+                if (function_exists('error_log')) {
+                    error_log('[JWT_AUTH] Found ca_jwt cookie in header, length: ' . strlen($cookies[$cookieName]));
+                }
+                return $cookies[$cookieName];
+            } else {
+                if (function_exists('error_log')) {
+                    error_log('[JWT_AUTH] ca_jwt cookie NOT found in parsed cookies. Available cookies: ' . implode(', ', array_keys($cookies)));
+                }
+            }
         }
 
         return null;

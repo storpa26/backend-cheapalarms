@@ -57,9 +57,19 @@ abstract class AdminController implements ControllerInterface
      */
     protected function ensureUserLoaded(): void
     {
-        global $current_user;
-        $current_user = null;
-        wp_get_current_user();
+        // FIX: Use direct JWT authentication instead of resetting user context
+        // This ensures the user is authenticated without losing context
+        $auth = $this->container->get(\CheapAlarms\Plugin\REST\Auth\Authenticator::class);
+        $userId = $auth->authenticateViaJwt();
+        
+        if ($userId && $userId > 0) {
+            wp_set_current_user($userId);
+        } else {
+            // Fallback to original method if JWT auth fails
+            global $current_user;
+            $current_user = null;
+            wp_get_current_user();
+        }
     }
 
     /**
