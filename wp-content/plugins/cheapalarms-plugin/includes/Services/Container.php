@@ -29,7 +29,16 @@ class Container
             throw new \RuntimeException("Service {$id} not registered.");
         }
 
-        $this->instances[$id] = ($this->bindings[$id])();
+        // Pass $this (Container) as argument to factory closures that expect it
+        // Try calling with Container first, fallback to no args if it fails
+        $factory = $this->bindings[$id];
+        try {
+            $this->instances[$id] = $factory($this);
+        } catch (\ArgumentCountError $e) {
+            // Factory doesn't expect Container parameter, call without args
+            $this->instances[$id] = $factory();
+        }
+        
         return $this->instances[$id];
     }
 

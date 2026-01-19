@@ -194,6 +194,18 @@ class Plugin
                 ->processEvent($eventId);
         }, 10, 1);
 
+        // Register custom cron schedule (must be registered globally, not conditionally)
+        // This ensures WordPress can find the schedule when rescheduling events
+        add_filter('cron_schedules', function ($schedules) {
+            if (!isset($schedules['ca_every_5_minutes'])) {
+                $schedules['ca_every_5_minutes'] = [
+                    'interval' => 300, // 5 minutes
+                    'display' => __('Every 5 Minutes', 'cheapalarms'),
+                ];
+            }
+            return $schedules;
+        });
+
         // Retry failed webhooks (every 5 minutes)
         add_action('ca_retry_failed_webhooks', function () {
             $this->container->get(\CheapAlarms\Plugin\Services\WebhookRetryService::class)
@@ -202,17 +214,6 @@ class Plugin
 
         // Schedule retry job (every 5 minutes)
         if (!wp_next_scheduled('ca_retry_failed_webhooks_recurring')) {
-            // Register custom schedule if needed
-            add_filter('cron_schedules', function ($schedules) {
-                if (!isset($schedules['ca_every_5_minutes'])) {
-                    $schedules['ca_every_5_minutes'] = [
-                        'interval' => 300, // 5 minutes
-                        'display' => __('Every 5 Minutes', 'cheapalarms'),
-                    ];
-                }
-                return $schedules;
-            });
-            
             wp_schedule_event(time() + 300, 'ca_every_5_minutes', 'ca_retry_failed_webhooks_recurring');
         }
 

@@ -171,30 +171,16 @@ class PortalController implements ControllerInterface
                 return true;
             },
             'callback'            => function (WP_REST_Request $request) {
-                // Force refresh of current user - clear cache to ensure JWT filter has run
-                global $current_user;
-                $current_user = null;
+                // FIX: Use direct JWT authentication instead of resetting user context
+                // This ensures JWT cookies are properly authenticated (same fix as AdminController)
+                $userId = $this->auth->authenticateViaJwt();
                 
-                // Try to get user again
-                $user = wp_get_current_user();
-                
-                // If still no user, manually check for JWT token and authenticate
-                if (!$user || 0 === $user->ID) {
-                    // Check if Authorization header exists
-                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-                    if (!$authHeader && function_exists('apache_request_headers')) {
-                        $headers = apache_request_headers();
-                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
-                    }
-                    
-                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                        // Token exists - manually trigger determine_current_user filter
-                        $userId = apply_filters('determine_current_user', 0);
-                        if ($userId > 0) {
-                            wp_set_current_user($userId);
-                            $user = wp_get_current_user();
-                        }
-                    }
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    // Fallback: try to get existing user (for non-JWT requests)
+                    $user = wp_get_current_user();
                 }
                 
                 if (!$user || 0 === $user->ID) {

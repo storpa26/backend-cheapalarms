@@ -166,9 +166,6 @@ class AuthController implements ControllerInterface
      */
     public function checkAuthentication(): bool|WP_Error
     {
-        // ADD THIS LOG
-        error_log('[AUTH_CHECK] Starting authentication check');
-        
         // FIX: Directly authenticate via JWT token, bypassing filter system
         // This ensures JWT authentication works reliably without filter conflicts
         $userId = $this->authenticator->authenticateViaJwt();
@@ -176,11 +173,9 @@ class AuthController implements ControllerInterface
         if ($userId && $userId > 0) {
             // Set the current user to ensure context persists
             wp_set_current_user($userId);
-            error_log('[AUTH_CHECK] Authentication SUCCESS - userId: ' . $userId);
             return true;
         }
 
-        error_log('[AUTH_CHECK] Authentication FAILED - returning 401 (userId: ' . ($userId ?? 'null') . ')');
         return new WP_Error(
             'rest_forbidden',
             __('Authentication required.', 'cheapalarms'),
@@ -193,22 +188,28 @@ class AuthController implements ControllerInterface
      */
     public function getCurrentUser(WP_REST_Request $request): WP_REST_Response
     {
-        // TEMPORARY DEBUG LOGGING
-        error_log('[AUTH_ME] HTTP_COOKIE: ' . ($_SERVER['HTTP_COOKIE'] ?? 'NOT SET'));
-        error_log('[AUTH_ME] $_COOKIE[ca_jwt]: ' . (isset($_COOKIE['ca_jwt']) ? 'SET (length: ' . strlen($_COOKIE['ca_jwt']) . ')' : 'NOT SET'));
-        error_log('[AUTH_ME] HTTP_AUTHORIZATION: ' . ($_SERVER['HTTP_AUTHORIZATION'] ?? 'NOT SET'));
-        error_log('[AUTH_ME] Current user ID before check: ' . get_current_user_id());
+        // TEMPORARY: Diagnostic logging for customer redirect loop
+        $isDebug = defined('WP_DEBUG') && WP_DEBUG;
+        
+        if ($isDebug) {
+            error_log('[AUTH_ME] Called - has HTTP_COOKIE: ' . (isset($_SERVER['HTTP_COOKIE']) ? 'YES' : 'NO'));
+            error_log('[AUTH_ME] Has $_COOKIE[ca_jwt]: ' . (isset($_COOKIE['ca_jwt']) ? 'YES (length: ' . strlen($_COOKIE['ca_jwt']) . ')' : 'NO'));
+        }
         
         $user = wp_get_current_user();
         if (!$user || 0 === $user->ID) {
-            error_log('[AUTH_ME] User not found - current_user_id: ' . get_current_user_id());
+            if ($isDebug) {
+                error_log('[AUTH_ME] User not found - current_user_id: ' . get_current_user_id());
+            }
             return new WP_REST_Response([
                 'ok' => false,
                 'err' => 'User not found',
             ], 401);
         }
         
-        error_log('[AUTH_ME] User authenticated - ID: ' . $user->ID);
+        if ($isDebug) {
+            error_log('[AUTH_ME] User found - ID: ' . $user->ID . ', roles: ' . implode(', ', $user->roles ?? []));
+        }
 
         $roles = $user->roles ?? [];
 
@@ -227,6 +228,12 @@ class AuthController implements ControllerInterface
             if (str_starts_with($cap, 'ca_') && $granted === true) {
                 $caCaps[] = $cap;
             }
+        }
+
+        // TEMPORARY: Diagnostic logging for customer redirect loop
+        if ($isDebug) {
+            error_log('[AUTH_ME] User details - hasCustomerRole: ' . ($hasCustomerRole ? 'YES' : 'NO') . ', isAdmin: ' . ($isAdmin ? 'YES' : 'NO') . ', isCustomer: ' . ($isCustomer ? 'YES' : 'NO'));
+            error_log('[AUTH_ME] Capabilities: ' . implode(', ', $caCaps));
         }
 
         $response = new WP_REST_Response([
