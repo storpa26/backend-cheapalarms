@@ -236,6 +236,113 @@ class Plugin
             }
         }, 10, 3);
 
+        // Register payment intent expiry cleanup (daily)
+        // FIXED: Capture container in closure to avoid $this context issues
+        // FIXED: Add batching and better edge case handling
+        $container = $this->container;
+        add_action('ca_cleanup_expired_payment_intents', function () use ($container) {
+            try {
+                global $wpdb;
+                $optionName = 'ca_portal_meta_%';
+                $batchSize = 100; // Process in batches to avoid memory issues
+                $offset = 0;
+                $cleaned = 0;
+                $currentTime = time();
+                
+                do {
+                    // FIXED: Add LIMIT and OFFSET for batching
+                    $results = $wpdb->get_results($wpdb->prepare(
+                        "SELECT option_name, option_value 
+                         FROM {$wpdb->options} 
+                         WHERE option_name LIKE %s
+                         LIMIT %d OFFSET %d",
+                        $optionName,
+                        $batchSize,
+                        $offset
+                    ), ARRAY_A);
+                    
+                    if (empty($results)) {
+                        break;
+                    }
+                    
+                    foreach ($results as $row) {
+                        $meta = maybe_unserialize($row['option_value']);
+                        if (!is_array($meta)) continue;
+                        
+                        $payment = $meta['payment'] ?? [];
+                        $expiresAt = $payment['paymentIntentExpiresAt'] ?? null;
+                        $paymentIntentId = $payment['paymentIntentId'] ?? null;
+                        
+                        // If payment intent expired and no successful payment recorded, clean it up
+                        if ($expiresAt && $currentTime > (int)$expiresAt && !empty($paymentIntentId)) {
+                            $hasSuccessfulPayment = false;
+                            
+                            // Check payments array for successful payments
+                            if (!empty($payment['payments']) && is_array($payment['payments'])) {
+                                foreach ($payment['payments'] as $p) {
+                                    $paymentStatus = $p['status'] ?? '';
+                                    if ($paymentStatus === 'succeeded') {
+                                        $hasSuccessfulPayment = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // FIXED: Extract estimateId from option_name to check for active payment lock
+                            // Format: ca_portal_meta_{estimateId}
+                            $prefix = 'ca_portal_meta_';
+                            $estimateId = str_replace($prefix, '', $row['option_name']);
+                            // Safety check: verify prefix was actually removed
+                            if ($estimateId === $row['option_name']) {
+                                // Prefix not found, skip lock check
+                                $estimateId = null;
+                            }
+                            
+                            // FIXED: Check if payment confirmation is currently in progress via lock
+                            $hasPaymentInProgress = false;
+                            if ($estimateId) {
+                                $paymentLockKey = 'ca_payment_lock_' . $estimateId;
+                                $lockValue = get_transient($paymentLockKey);
+                                if ($lockValue !== false) {
+                                    // Check if lock is stale (older than 10 seconds)
+                                    $lockAge = $currentTime - (int)$lockValue;
+                                    if ($lockAge <= 10) {
+                                        $hasPaymentInProgress = true;
+                                    }
+                                }
+                            }
+                            
+                            // FIXED: Only clean up if no successful payment AND no payment in progress
+                            if (!$hasSuccessfulPayment && !$hasPaymentInProgress) {
+                                $meta['payment']['paymentIntentId'] = null;
+                                $meta['payment']['paymentIntentExpiresAt'] = null;
+                                
+                                update_option($row['option_name'], $meta);
+                                $cleaned++;
+                            }
+                        }
+                    }
+                    
+                    $offset += $batchSize;
+                } while (count($results) === $batchSize);
+                
+                if ($cleaned > 0) {
+                    $logger = $container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->info('Cleaned up expired payment intents', ['count' => $cleaned]);
+                }
+            } catch (\Exception $e) {
+                $logger = $container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                $logger->error('Failed to cleanup expired payment intents', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }, 10, 0);
+
+        // Schedule cleanup job (daily at 2 AM)
+        if (!wp_next_scheduled('ca_cleanup_expired_payment_intents')) {
+            wp_schedule_event(strtotime('tomorrow 2:00'), 'daily', 'ca_cleanup_expired_payment_intents');
+        }
+
         $this->registerCors();
         $this->registerRestEndpoints();
         $this->registerFrontend();

@@ -324,26 +324,21 @@ class PortalService
 
             if ($invoiceTotal !== null && $invoiceTotal > 0) {
                 // Calculate existing paid amount (excluding refunded payments)
-                $existingPaidAmount = 0;
-                if (!empty($payment['payments']) && is_array($payment['payments'])) {
-                    foreach ($payment['payments'] as $prevPayment) {
-                        $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
-                        $isRefunded = ($prevPayment['refunded'] ?? false) === true;
-                        if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
-                            $existingPaidAmount += (float) $prevPayment['amount'];
-                        }
-                    }
-                }
+                // FIXED: Use shared helper method for consistency
+                $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
 
                 // Calculate minimum payment using same logic as StripeController
                 $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
                 $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
                 $isFirstPayment = ($existingPaidAmount == 0);
+                $isSubsequentPayment = !$isFirstPayment; // Second payment (after work) - requires full payment
 
                 $minimumPaymentInfo = [
                     'minimumPayment' => $minimumPayment,
                     'remainingBalance' => $remainingBalance,
                     'isFirstPayment' => $isFirstPayment,
+                    'isSubsequentPayment' => $isSubsequentPayment, // Flag for frontend to hide partial options
+                    'requiresFullPayment' => $isSubsequentPayment, // Second payment must be full
                     'invoiceTotal' => $invoiceTotal,
                     'existingPaidAmount' => $existingPaidAmount,
                 ];
@@ -1406,13 +1401,18 @@ class PortalService
                 ];
             }
             
-            // Validate estimate is booked
+            // Validate estimate is accepted (payment allowed after acceptance, booking is optional)
             $workflowStatus = $meta['workflow']['status'] ?? 'requested';
-            if ($workflowStatus !== 'booked') {
+            $quoteStatus = $meta['quote']['status'] ?? 'sent';
+            
+            // Allow payment when estimate is accepted OR booked (booking is optional step)
+            $canPay = ($workflowStatus === 'accepted' || $workflowStatus === 'booked' || $quoteStatus === 'accepted');
+            
+            if (!$canPay) {
                 delete_transient($lockKey);
                 return new WP_Error(
                     'invalid_status',
-                    __('Estimate must be booked before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
+                    __('Estimate must be accepted before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
                     ['status' => 400]
                 );
             }
@@ -1536,18 +1536,8 @@ class PortalService
             }
             
             // SECURITY: Calculate cumulative payment amount (for partial payment tracking)
-            $existingPaidAmount = 0;
-            if (!empty($existingPayment['amount']) && $existingPayment['status'] === 'paid') {
-                // If already paid, use existing amount (shouldn't happen due to duplicate check above, but defensive)
-                $existingPaidAmount = (float) $existingPayment['amount'];
-            } elseif (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
-                // Sum all previous partial payments
-                foreach ($meta['payment']['payments'] as $prevPayment) {
-                    if (!empty($prevPayment['amount'])) {
-                        $existingPaidAmount += (float) $prevPayment['amount'];
-                    }
-                }
-            }
+            // FIXED: Use consistent logic with StripeController (exclude refunded payments)
+            $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
             
             $totalPaidAmount = $existingPaidAmount + $amount;
             
@@ -5230,7 +5220,6 @@ class PortalService
     {
         // Constants
         $MINIMUM_PAYMENT_FIRST_PERCENTAGE = 0.25; // 25% of invoice
-        $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE = 0.10; // 10% of remaining
         $MINIMUM_ABSOLUTE_FLOOR = 50.00; // $50 AUD minimum
         $MINIMUM_FINAL_THRESHOLD = 10.00; // If remaining < $10, require full
 
@@ -5251,7 +5240,8 @@ class PortalService
         $isFirstPayment = ($existingPaidAmount == 0);
 
         if ($isFirstPayment) {
-            // First payment: check for deposit requirement
+            // First payment (before work): Can be partial
+            // Check for deposit requirement
             $depositRequired = $invoice['depositRequired'] ?? false;
             
             if ($depositRequired) {
@@ -5274,9 +5264,9 @@ class PortalService
             // Cap minimum at invoice total (deposit can't exceed total)
             $minimum = min($minimum, $invoiceTotal);
         } else {
-            // Subsequent payment: use 10% of remaining balance or $50, whichever is higher
-            $percentageMinimum = $remainingBalance * $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE;
-            $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+            // Second payment (after work): MUST be full remaining balance
+            // Only 2 installments allowed: before work (partial) and after work (full)
+            $minimum = $remainingBalance;
         }
 
         // Final check: if remaining balance < calculated minimum, require full remaining
@@ -5285,6 +5275,39 @@ class PortalService
         }
 
         return round($minimum, 2);
+    }
+
+    /**
+     * Calculate existing paid amount from meta (excluding refunded payments)
+     * 
+     * FIXED: Consistent calculation logic used in both StripeController and PortalService
+     * Only counts successful, non-refunded payments
+     * 
+     * @param array $meta Portal meta data
+     * @return float Existing paid amount
+     */
+    private function calculateExistingPaidAmount(array $meta): float
+    {
+        $existingPaidAmount = 0;
+        $existingPayment = $meta['payment'] ?? null;
+        
+        // If already fully paid (legacy structure), use existing amount
+        if (!empty($existingPayment['amount']) && ($existingPayment['status'] ?? '') === 'paid') {
+            return (float) $existingPayment['amount'];
+        }
+        
+        // Sum all successful, non-refunded payments from payments array
+        if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
+            foreach ($meta['payment']['payments'] as $prevPayment) {
+                $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
+                $isRefunded = ($prevPayment['refunded'] ?? false) === true;
+                if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
+                    $existingPaidAmount += (float) $prevPayment['amount'];
+                }
+            }
+        }
+        
+        return $existingPaidAmount;
     }
 
     /**

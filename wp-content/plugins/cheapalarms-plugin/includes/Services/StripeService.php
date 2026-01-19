@@ -234,6 +234,7 @@ class StripeService
             'amount' => ($data['amount'] ?? 0) / 100,
             'currency' => $data['currency'] ?? 'aud',
             'metadata' => $data['metadata'] ?? [],
+            'client_secret' => $data['client_secret'] ?? null, // Include client secret for reuse scenarios
         ];
     }
 

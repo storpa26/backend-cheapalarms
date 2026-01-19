@@ -46,6 +46,13 @@ class StripeController extends AdminController
             'callback' => fn (WP_REST_Request $request) => $this->confirmPaymentIntent($request),
         ]);
 
+        // Get client secret for existing payment intent (for reused payment intents)
+        register_rest_route('ca/v1', '/stripe/get-client-secret', [
+            'methods' => 'GET',
+            'permission_callback' => fn () => $this->requirePortalOrAdmin(),
+            'callback' => fn (WP_REST_Request $request) => $this->getClientSecret($request),
+        ]);
+
         // Handle Stripe webhook events
         register_rest_route('ca/v1', '/stripe/webhook', [
             'methods' => 'POST',
@@ -72,10 +79,9 @@ class StripeController extends AdminController
      * Calculate minimum payment amount based on invoice, deposit, and payment history
      * 
      * Business Rules:
-     * - First payment: Use deposit if configured, otherwise 25% of invoice or $50 (whichever is higher)
-     * - Subsequent payment: 10% of remaining balance or $50 (whichever is higher)
+     * - First payment (before work): Can be partial - Use deposit if configured, otherwise 25% of invoice or $50 (whichever is higher)
+     * - Second payment (after work): MUST be full remaining balance (no partials allowed - only 2 installments total)
      * - If remaining balance < $10: Require full remaining balance
-     * - If remaining balance < calculated minimum: Require full remaining balance
      * - If invoice < $50: Require full payment (no partials allowed)
      * 
      * @param float $invoiceTotal Total invoice amount
@@ -87,7 +93,6 @@ class StripeController extends AdminController
     {
         // Constants
         $MINIMUM_PAYMENT_FIRST_PERCENTAGE = 0.25; // 25% of invoice
-        $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE = 0.10; // 10% of remaining
         $MINIMUM_ABSOLUTE_FLOOR = 50.00; // $50 AUD minimum
         $MINIMUM_FINAL_THRESHOLD = 10.00; // If remaining < $10, require full
 
@@ -108,7 +113,8 @@ class StripeController extends AdminController
         $isFirstPayment = ($existingPaidAmount == 0);
 
         if ($isFirstPayment) {
-            // First payment: check for deposit requirement
+            // First payment (before work): Can be partial
+            // Check for deposit requirement
             $depositRequired = $invoice['depositRequired'] ?? false;
             
             if ($depositRequired) {
@@ -131,9 +137,9 @@ class StripeController extends AdminController
             // Cap minimum at invoice total (deposit can't exceed total)
             $minimum = min($minimum, $invoiceTotal);
         } else {
-            // Subsequent payment: use 10% of remaining balance or $50, whichever is higher
-            $percentageMinimum = $remainingBalance * $MINIMUM_PAYMENT_SUBSEQUENT_PERCENTAGE;
-            $minimum = max($percentageMinimum, $MINIMUM_ABSOLUTE_FLOOR);
+            // Second payment (after work): MUST be full remaining balance
+            // Only 2 installments allowed: before work (partial) and after work (full)
+            $minimum = $remainingBalance;
         }
 
         // Final check: if remaining balance < calculated minimum, require full remaining
@@ -232,17 +238,8 @@ class StripeController extends AdminController
         }
 
         // Calculate existing paid amount for minimum payment calculation
-        $existingPaidAmount = 0;
-        if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
-            foreach ($meta['payment']['payments'] as $prevPayment) {
-                // Only count successful, non-refunded payments
-                $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
-                $isRefunded = ($prevPayment['refunded'] ?? false) === true;
-                if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
-                    $existingPaidAmount += (float) $prevPayment['amount'];
-                }
-            }
-        }
+        // FIXED: Use consistent calculation logic (exclude refunded payments)
+        $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
 
         // Calculate minimum payment requirement
         $minimumPayment = $this->calculateMinimumPayment($invoiceTotal, $existingPaidAmount, $invoice);
@@ -252,19 +249,28 @@ class StripeController extends AdminController
         if ($amount < $minimumPayment) {
             // Allow small tolerance for rounding (0.01)
             if (abs($amount - $minimumPayment) > 0.01) {
-                return $this->respond(new WP_Error(
-                    'amount_below_minimum',
-                    sprintf(
+                $isSubsequentPayment = ($existingPaidAmount > 0);
+                $errorMessage = $isSubsequentPayment
+                    ? sprintf(
+                        __('Second payment must be the full remaining balance of %s. Only 2 installments allowed: before work (partial) and after work (full).', 'cheapalarms'),
+                        number_format($minimumPayment, 2)
+                    )
+                    : sprintf(
                         __('Payment amount must be at least %s. Minimum payment: %s', 'cheapalarms'),
                         number_format($minimumPayment, 2),
                         number_format($minimumPayment, 2)
-                    ),
+                    );
+                
+                return $this->respond(new WP_Error(
+                    'amount_below_minimum',
+                    $errorMessage,
                     [
                         'status' => 400,
                         'minimumPayment' => $minimumPayment,
                         'remainingBalance' => $remainingBalance,
                         'invoiceTotal' => $invoiceTotal,
                         'existingPaidAmount' => $existingPaidAmount,
+                        'isSubsequentPayment' => $isSubsequentPayment,
                     ]
                 ));
             }
@@ -306,7 +312,7 @@ class StripeController extends AdminController
                 // Lock is active - another request is creating payment intent
                 return $this->respond(new WP_Error(
                     'processing',
-                    __('Another request is currently creating a payment intent. Please wait a moment and try again.', 'cheapalarms'),
+                    __('Payment is being processed. Please wait a moment and try again.', 'cheapalarms'),
                     ['status' => 409]
                 ));
             }
@@ -333,23 +339,64 @@ class StripeController extends AdminController
             $existingCurrency = $meta['payment']['currency'] ?? 'aud';
 
             // Reuse existing payment intent if amount, currency, and revision match
+            // FIXED: Check status FIRST, then expiry to prevent race conditions
             if ($existingIntentId && 
                 $existingAmount === $amount && 
                 $existingCurrency === $currency &&
                 ($meta['quote']['revisionNumber'] ?? 0) === $revisionNumber) {
                 
-                $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
-                if ($expiresAt && time() < (int)$expiresAt) {
-                    delete_transient($lockKey);
-                    return $this->respond([
-                        'ok' => true,
-                        'clientSecret' => null,
+                // Retrieve existing payment intent to check status FIRST (before checking expiry)
+                $existingIntent = $this->stripeService->getPaymentIntent($existingIntentId);
+                
+                if (is_wp_error($existingIntent)) {
+                    // FIXED: Log error but keep lock (will create new payment intent)
+                    // Lock remains active from line 314, will be used for new intent creation
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->warning('Failed to retrieve existing payment intent for reuse', [
+                        'estimateId' => $estimateId,
                         'paymentIntentId' => $existingIntentId,
-                        'amount' => $amount,
-                        'currency' => $currency,
-                        'reused' => true,
+                        'error' => $existingIntent->get_error_message(),
                     ]);
+                    // Continue to payment intent creation below (lock already set)
+                } else {
+                    // Check if payment intent is in a reusable state
+                    $status = $existingIntent['status'] ?? '';
+                    $reusableStates = ['requires_payment_method', 'requires_confirmation'];
+                    
+                    // Only proceed if status is reusable
+                    if (in_array($status, $reusableStates)) {
+                        // Now check expiry (after confirming status is valid)
+                        $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
+                        if ($expiresAt && time() < (int)$expiresAt) {
+                            $clientSecret = $existingIntent['client_secret'] ?? null;
+                            
+                            if ($clientSecret) {
+                                // FIXED: Release lock before returning (payment intent reused, no new creation needed)
+                                delete_transient($lockKey);
+                                return $this->respond([
+                                    'ok' => true,
+                                    'clientSecret' => $clientSecret,
+                                    'paymentIntentId' => $existingIntentId,
+                                    'amount' => $amount,
+                                    'currency' => $currency,
+                                    'reused' => true,
+                                ]);
+                            }
+                        }
+                        // If expired or no client secret, create new payment intent
+                        // Lock remains active (will be used for new intent creation)
+                    } else {
+                        // If status is not reusable, create new payment intent
+                        // Lock remains active (will be used for new intent creation)
+                        $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                        $logger->info('Payment intent not reusable, creating new one', [
+                            'estimateId' => $estimateId,
+                            'paymentIntentId' => $existingIntentId,
+                            'status' => $status,
+                        ]);
+                    }
                 }
+                // Lock remains active for new payment intent creation (set at line 314)
             }
 
             // ALWAYS include estimateId in metadata (required for webhook processing)
@@ -400,6 +447,50 @@ class StripeController extends AdminController
                 ['status' => 500]
             ));
         }
+    }
+
+    private function getClientSecret(WP_REST_Request $request): WP_REST_Response
+    {
+        $paymentIntentId = sanitize_text_field($request->get_param('paymentIntentId') ?? '');
+        
+        if (empty($paymentIntentId)) {
+            return $this->respond(new WP_Error('missing_payment_intent_id', __('Payment intent ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        // Retrieve payment intent from Stripe
+        $paymentIntent = $this->stripeService->getPaymentIntent($paymentIntentId);
+        
+        if (is_wp_error($paymentIntent)) {
+            return $this->respond($paymentIntent);
+        }
+
+        // Check if payment intent is in a state that allows payment
+        $status = $paymentIntent['status'] ?? '';
+        $reusableStates = ['requires_payment_method', 'requires_confirmation'];
+        
+        if (!in_array($status, $reusableStates)) {
+            return $this->respond(new WP_Error(
+                'invalid_payment_intent_status',
+                sprintf(__('Payment intent is in "%s" status and cannot be used for payment. Please create a new payment intent.', 'cheapalarms'), $status),
+                ['status' => 400, 'paymentIntentStatus' => $status]
+            ));
+        }
+
+        $clientSecret = $paymentIntent['client_secret'] ?? null;
+        
+        if (empty($clientSecret)) {
+            return $this->respond(new WP_Error(
+                'no_client_secret',
+                __('Client secret not available for this payment intent. The payment intent may have been completed or cancelled.', 'cheapalarms'),
+                ['status' => 404]
+            ));
+        }
+
+        return $this->respond([
+            'ok' => true,
+            'clientSecret' => $clientSecret,
+            'paymentIntentId' => $paymentIntentId,
+        ]);
     }
 
     private function confirmPaymentIntent(WP_REST_Request $request): WP_REST_Response
@@ -810,6 +901,39 @@ class StripeController extends AdminController
             ]);
             return false;
         }
+    }
+
+    /**
+     * Calculate existing paid amount from meta (excluding refunded payments)
+     * 
+     * FIXED: Consistent calculation logic used in both StripeController and PortalService
+     * Only counts successful, non-refunded payments
+     * 
+     * @param array $meta Portal meta data
+     * @return float Existing paid amount
+     */
+    private function calculateExistingPaidAmount(array $meta): float
+    {
+        $existingPaidAmount = 0;
+        $existingPayment = $meta['payment'] ?? null;
+        
+        // If already fully paid (legacy structure), use existing amount
+        if (!empty($existingPayment['amount']) && ($existingPayment['status'] ?? '') === 'paid') {
+            return (float) $existingPayment['amount'];
+        }
+        
+        // Sum all successful, non-refunded payments from payments array
+        if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
+            foreach ($meta['payment']['payments'] as $prevPayment) {
+                $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
+                $isRefunded = ($prevPayment['refunded'] ?? false) === true;
+                if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
+                    $existingPaidAmount += (float) $prevPayment['amount'];
+                }
+            }
+        }
+        
+        return $existingPaidAmount;
     }
 }
 

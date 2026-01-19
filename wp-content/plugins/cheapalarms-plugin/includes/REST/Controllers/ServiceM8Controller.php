@@ -6,6 +6,7 @@ use CheapAlarms\Plugin\REST\Auth\Authenticator;
 use CheapAlarms\Plugin\Services\Container;
 use CheapAlarms\Plugin\Services\JobLinkService;
 use CheapAlarms\Plugin\Services\ServiceM8Service;
+use CheapAlarms\Plugin\Services\Shared\LocationResolver;
 use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
@@ -20,12 +21,14 @@ class ServiceM8Controller implements ControllerInterface
     private ServiceM8Service $service;
     private JobLinkService $linkService;
     private Authenticator $auth;
+    private LocationResolver $locationResolver;
 
     public function __construct(private Container $container)
     {
         $this->service = $this->container->get(ServiceM8Service::class);
         $this->linkService = $this->container->get(JobLinkService::class);
         $this->auth    = $this->container->get(Authenticator::class);
+        $this->locationResolver = $this->container->get(LocationResolver::class);
     }
 
     /**
@@ -381,7 +384,7 @@ class ServiceM8Controller implements ControllerInterface
                     }
 
                     $estimateId = sanitize_text_field($body['estimateId'] ?? '');
-                    $locationId = sanitize_text_field($body['locationId'] ?? '');
+                    $locationIdParam = sanitize_text_field($body['locationId'] ?? '');
                     $options = is_array($body['options'] ?? null) ? $body['options'] : [];
 
                     if (empty($estimateId)) {
@@ -391,10 +394,15 @@ class ServiceM8Controller implements ControllerInterface
                         ], 400);
                     }
 
+                    // Resolve locationId from request body or config default (like other admin endpoints)
+                    $locationId = !empty($locationIdParam) 
+                        ? $locationIdParam 
+                        : $this->locationResolver->resolve(null);
+                    
                     if (empty($locationId)) {
                         return new WP_REST_Response([
                             'ok' => false,
-                            'error' => 'locationId is required',
+                            'error' => 'locationId is required. Please provide it in the request or configure it in settings.',
                         ], 400);
                     }
 
