@@ -76,47 +76,55 @@ class EstimateController implements ControllerInterface
                     return $this->respond($result, $request);
                 }
                 
-                // Force refresh of current user - clear cache to ensure JWT filter has run
-                global $current_user;
-                $current_user = null;
-                
-                // Try to get user again
-                $user = wp_get_current_user();
-                
-                // If still no user, manually check for JWT token and authenticate
-                if (!$user || 0 === $user->ID) {
-                    // Check if Authorization header exists
-                    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-                    if (!$authHeader && function_exists('apache_request_headers')) {
-                        $headers = apache_request_headers();
-                        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
-                    }
-                    
-                    // Also check cookies for JWT token
-                    $token = null;
-                    if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                        $token = trim(substr($authHeader, 7));
-                    } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
-                        $token = $_COOKIE['ca_jwt'];
-                    }
-                    
-                    if ($token) {
-                        // Token exists - manually trigger determine_current_user filter
-                        $userId = apply_filters('determine_current_user', 0);
-                        if ($userId > 0) {
-                            wp_set_current_user($userId);
-                            $user = wp_get_current_user();
-                        }
-                    }
+                // FIX: Use direct JWT authentication instead of resetting user context
+                // This ensures JWT cookies are properly authenticated (same fix as /portal/dashboard)
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
                 }
                 
                 // Check if user is authenticated and linked to estimate
                 if ($user && $user->ID > 0) {
                     $linkedEstimateIds = get_user_meta($user->ID, 'ca_estimate_ids', true);
-                    if (is_array($linkedEstimateIds) && in_array($estimateId, $linkedEstimateIds, true)) {
+                    if (!is_array($linkedEstimateIds)) {
+                        $linkedEstimateIds = array_filter([$linkedEstimateIds]);
+                    }
+                    
+                    // FIX: Normalize estimate IDs to strings for comparison (matches dashboard logic)
+                    // This prevents type mismatch failures (string vs int) that cause 401 errors
+                    $normalizedLinkedIds = array_map('strval', $linkedEstimateIds);
+                    $normalizedEstimateId = (string) $estimateId;
+                    
+                    if (in_array($normalizedEstimateId, $normalizedLinkedIds, true)) {
                         // User is linked to this estimate - allow access
                         $result = $this->service->getEstimate($request->get_params());
                         return $this->respond($result, $request);
+                    }
+                    
+                    // FIX: Also check if estimate is linked to user via portal metadata
+                    // This handles cases where ca_estimate_ids might be out of sync
+                    // or where the estimate appears in the user's dashboard
+                    if (current_user_can('ca_access_portal')) {
+                        $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+                        $meta = $portalMetaRepo->get($estimateId);
+                        
+                        if (is_array($meta) && !empty($meta)) {
+                            // Check if estimate is explicitly linked to this user
+                            if (isset($meta['account']['userId']) && (int) $meta['account']['userId'] === $user->ID) {
+                                // Estimate is linked to this user via portal metadata - allow access
+                                $result = $this->service->getEstimate($request->get_params());
+                                return $this->respond($result, $request);
+                            }
+                            
+                            // FALLBACK: If estimate has portal metadata and user has portal access,
+                            // and the estimate would appear in their dashboard (is in ca_estimate_ids),
+                            // allow access even if userId check failed (handles edge cases)
+                            // This is safe because if it's in ca_estimate_ids, it should be accessible
+                            // Note: We already checked ca_estimate_ids above, so this is just a safety net
+                        }
                     }
                 }
                 
@@ -368,35 +376,28 @@ class EstimateController implements ControllerInterface
                         return false; // No estimate ID provided
                     }
                     
-                    // Force refresh of current user - clear cache to ensure JWT filter has run
-                    global $current_user;
-                    $current_user = null;
-                    
-                    // Try to get user again
-                    $user = wp_get_current_user();
-                    
-                    // If still no user, manually check for JWT token and authenticate
-                    if (!$user || 0 === $user->ID) {
-                        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-                        if (!$authHeader && function_exists('apache_request_headers')) {
-                            $headers = apache_request_headers();
-                            $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
-                        }
-                        
-                        if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                            // Token exists - manually trigger determine_current_user filter
-                            $userId = apply_filters('determine_current_user', 0);
-                            if ($userId > 0) {
-                                wp_set_current_user($userId);
-                                $user = wp_get_current_user();
-                            }
-                        }
+                    // FIX: Use direct JWT authentication instead of resetting user context
+                    $userId = $this->auth->authenticateViaJwt();
+                    if ($userId && $userId > 0) {
+                        wp_set_current_user($userId);
+                        $user = wp_get_current_user();
+                    } else {
+                        $user = wp_get_current_user();
                     }
                     
                     // Check if user is authenticated and linked to estimate
                     if ($user && $user->ID > 0) {
                         $linkedEstimateIds = get_user_meta($user->ID, 'ca_estimate_ids', true);
-                        if (is_array($linkedEstimateIds) && in_array($estimateId, $linkedEstimateIds, true)) {
+                        if (!is_array($linkedEstimateIds)) {
+                            $linkedEstimateIds = array_filter([$linkedEstimateIds]);
+                        }
+                        
+                        // FIX: Normalize estimate IDs to strings for comparison (matches dashboard logic)
+                        // This prevents type mismatch failures (string vs int)
+                        $normalizedLinkedIds = array_map('strval', $linkedEstimateIds);
+                        $normalizedEstimateId = (string) $estimateId;
+                        
+                        if (in_array($normalizedEstimateId, $normalizedLinkedIds, true)) {
                             return true; // User is logged in and linked to this estimate
                         }
                     }
@@ -420,8 +421,11 @@ class EstimateController implements ControllerInterface
             [
                 'methods'             => 'GET',
                 'permission_callback' => function (WP_REST_Request $request) {
-                    // Allow logged-in users with portal access
-                    if (is_user_logged_in()) {
+                    // FIX: Authenticate via JWT first, then check capabilities
+                    // This ensures JWT-authenticated users can access photos
+                    $userId = $this->auth->authenticateViaJwt();
+                    if ($userId && $userId > 0) {
+                        wp_set_current_user($userId);
                         return current_user_can('ca_access_portal') || current_user_can('ca_manage_portal');
                     }
                     // Allow public access - photos are linked to estimateId, not sensitive data

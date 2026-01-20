@@ -56,9 +56,18 @@ class Authenticator
      */
     public function ensureUserLoaded(): void
     {
-        global $current_user;
-        $current_user = null;
-        wp_get_current_user();
+        // FIX: Use direct JWT authentication instead of resetting user context
+        // This ensures JWT cookies are properly authenticated
+        $userId = $this->authenticateViaJwt();
+        
+        if ($userId && $userId > 0) {
+            wp_set_current_user($userId);
+        } else {
+            // Fallback to original method if JWT auth fails (for non-JWT requests)
+            global $current_user;
+            $current_user = null;
+            wp_get_current_user();
+        }
     }
 
     /**
@@ -88,6 +97,15 @@ class Authenticator
 
     public function requireCapability(string $capability): bool|WP_Error
     {
+        // FIX: Ensure JWT authentication before checking capabilities
+        // This ensures JWT tokens are processed even in permission_callbacks
+        // This is critical because permission_callbacks run before callbacks,
+        // and we need JWT auth to work reliably in all contexts
+        $userId = $this->authenticateViaJwt();
+        if ($userId && $userId > 0) {
+            wp_set_current_user($userId);
+        }
+        
         if (current_user_can($capability) || current_user_can('manage_options')) {
             return true;
         }

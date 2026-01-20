@@ -230,38 +230,13 @@ class HealthController implements ControllerInterface
      */
     private function checkAdminAuth(): bool
     {
-        // Force refresh of current user - clear cache to ensure JWT filter has run
-        global $current_user;
-        $current_user = null;
-        
-        // Try to get user again
-        $user = wp_get_current_user();
-        
-        // If still no user, manually check for JWT token and authenticate
-        if (!$user || !$user->ID) {
-            // Check if Authorization header exists
-            $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['Authorization'] ?? null;
-            if (!$authHeader && function_exists('apache_request_headers')) {
-                $headers = apache_request_headers();
-                $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
-            }
-            
-            // Also check cookies for JWT token
-            $token = null;
-            if ($authHeader && stripos($authHeader, 'Bearer ') === 0) {
-                $token = trim(substr($authHeader, 7));
-            } elseif (isset($_COOKIE['ca_jwt']) && !empty($_COOKIE['ca_jwt'])) {
-                $token = $_COOKIE['ca_jwt'];
-            }
-            
-            if ($token) {
-                // Token exists - manually trigger determine_current_user filter
-                $userId = apply_filters('determine_current_user', 0);
-                if ($userId > 0) {
-                    wp_set_current_user($userId);
-                    $user = wp_get_current_user();
-                }
-            }
+        // FIX: Use direct JWT authentication instead of manual token checking
+        $userId = $this->auth->authenticateViaJwt();
+        if ($userId && $userId > 0) {
+            wp_set_current_user($userId);
+            $user = wp_get_current_user();
+        } else {
+            $user = wp_get_current_user();
         }
         
         if (!$user || !$user->ID) {

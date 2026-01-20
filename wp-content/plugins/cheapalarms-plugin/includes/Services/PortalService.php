@@ -159,7 +159,13 @@ class PortalService
             if (!is_array($linked)) {
                 $linked = array_filter([$linked]);
             }
-            if (!in_array($estimateId, $linked, true)) {
+            
+            // FIX: Normalize estimate IDs to strings for comparison (matches dashboard logic)
+            // This prevents type mismatch failures (string vs int) that cause 403 errors
+            $normalizedLinkedIds = array_map('strval', $linked);
+            $normalizedEstimateId = (string) $estimateId;
+            
+            if (!in_array($normalizedEstimateId, $normalizedLinkedIds, true)) {
                 return new WP_Error(
                     'forbidden_estimate',
                     __('This estimate is not linked to your account.', 'cheapalarms'),
@@ -343,6 +349,40 @@ class PortalService
                     'existingPaidAmount' => $existingPaidAmount,
                 ];
             }
+            
+            // CRITICAL FIX: Override invoice status with payment-calculated status
+            // This ensures invoice.status reflects actual payment state, not GHL status
+            // Payment status is the source of truth (calculated from payment records)
+            if ($payment && isset($payment['status'])) {
+                // Use payment.status as source of truth (paid, partial, or null)
+                // This ensures invoice status matches actual payment state
+                $oldStatus = $invoice['status'] ?? null;
+                $invoice['status'] = $payment['status'];
+                
+                // Log status override for debugging data inconsistencies
+                if ($oldStatus !== $payment['status']) {
+                    $this->logger->info('Invoice status overridden with payment status', [
+                        'estimateId' => $estimateId,
+                        'oldInvoiceStatus' => $oldStatus,
+                        'newInvoiceStatus' => $payment['status'],
+                        'paymentStatus' => $payment['status'],
+                    ]);
+                }
+            } elseif (isset($invoice['status']) && $invoice['status'] === 'paid' && (!isset($payment) || !isset($payment['status']))) {
+                // If no payment yet but GHL shows 'paid', this is a data inconsistency
+                // GHL might show 'paid' but we have no payment records - treat as created/draft
+                // This prevents showing "Paid" when no payment has actually been made
+                $this->logger->warning('Invoice status shows paid but no payment records exist - correcting to created', [
+                    'estimateId' => $estimateId,
+                    'invoiceStatus' => $invoice['status'],
+                    'hasPaymentObject' => isset($payment),
+                ]);
+                $invoice['status'] = 'created';
+            }
+            
+            // Update meta with modified invoice to ensure changes persist
+            // This ensures the corrected status is returned in the response
+            $meta['invoice'] = $invoice;
         }
 
         return [
@@ -1513,13 +1553,29 @@ class PortalService
                 // Get actual payment amount from Stripe (already converted from cents to dollars)
                 $actualPaymentAmount = $paymentIntentResult['amount'] ?? 0;
                 
-                // Verify payment intent status is succeeded
-                if (($paymentIntentResult['status'] ?? 'unknown') !== 'succeeded') {
+                // Verify payment intent status
+                $paymentStatus = $paymentIntentResult['status'] ?? 'unknown';
+                
+                // Allow 'succeeded' and 'processing' statuses
+                // 'processing' means payment is being processed asynchronously - webhook will confirm final status
+                if ($paymentStatus === 'succeeded') {
+                    // Payment succeeded - proceed with confirmation
+                } elseif ($paymentStatus === 'processing') {
+                    // Payment is processing - this is acceptable, webhook will handle final confirmation
+                    // Log for tracking but allow the payment record to be created
+                    $this->logger->info('Stripe payment intent is processing, allowing payment record creation', [
+                        'estimateId' => $estimateId,
+                        'paymentIntentId' => $transactionId,
+                        'status' => $paymentStatus,
+                    ]);
+                    // Continue to create payment record - webhook will update status when processing completes
+                } else {
+                    // Payment not in a valid state
                     delete_transient($lockKey);
                     return new WP_Error(
                         'payment_not_succeeded',
-                        __('Payment was not successful. Please try again.', 'cheapalarms'),
-                        ['status' => 400]
+                        sprintf(__('Payment was not successful. Status: %s. Please try again.', 'cheapalarms'), $paymentStatus),
+                        ['status' => 400, 'payment_status' => $paymentStatus]
                     );
                 }
                 
@@ -4656,7 +4712,13 @@ class PortalService
         if (!is_array($existing)) {
             $existing = [];
         }
-        if (!in_array($estimateId, $existing, true)) {
+        
+        // FIX: Normalize estimate IDs to strings for comparison (matches dashboard logic)
+        // This prevents type mismatch failures (string vs int) that could allow duplicates
+        $normalizedExisting = array_map('strval', $existing);
+        $normalizedEstimateId = (string) $estimateId;
+        
+        if (!in_array($normalizedEstimateId, $normalizedExisting, true)) {
             $existing[] = $estimateId;
         }
         update_user_meta($userId, 'ca_estimate_ids', array_values(array_unique($existing)));

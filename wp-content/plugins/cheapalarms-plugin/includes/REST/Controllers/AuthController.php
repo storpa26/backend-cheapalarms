@@ -37,14 +37,16 @@ class AuthController implements ControllerInterface
         register_rest_route('ca/v1', '/auth/nonce', [
             'methods'             => 'GET',
             'permission_callback' => function () {
-                // Support JWT-authenticated sessions by resolving current user if needed
-                $userId = get_current_user_id();
-                if ($userId <= 0) {
-                    $userId = (int) apply_filters('determine_current_user', 0);
-                    if ($userId > 0) {
-                        wp_set_current_user($userId);
-                    }
+                // FIX: Use direct JWT authentication for consistency with other endpoints
+                $userId = $this->authenticator->authenticateViaJwt();
+                
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    return true;
                 }
+                
+                // Fallback: check if user is already authenticated (for non-JWT requests)
+                $userId = get_current_user_id();
                 return $userId > 0;
             },
             'callback'            => function () {

@@ -112,13 +112,15 @@ class PortalController implements ControllerInterface
                         return new WP_REST_Response(['ok' => false, 'err' => 'estimateId required'], 400);
                     }
                     
-                    // FIX: Use Authenticator's ensureUserLoaded() to properly trigger JWT authentication
-                    // This ensures determine_current_user filter runs at priority 1 (before cookie auth)
-                    // and processes JWT cookies before cookie auth can interfere
-                    $this->auth->ensureUserLoaded();
-                    
-                    // Get the user - should be authenticated if JWT cookie exists
-                    $user = wp_get_current_user();
+                    // FIX: Use direct JWT authentication instead of ensureUserLoaded()
+                    // This ensures JWT cookies are properly authenticated (same fix as /portal/dashboard)
+                    $userId = $this->auth->authenticateViaJwt();
+                    if ($userId && $userId > 0) {
+                        wp_set_current_user($userId);
+                        $user = wp_get_current_user();
+                    } else {
+                        $user = wp_get_current_user();
+                    }
                     
                     // If user is authenticated, allow access
                     if ($user && $user->ID > 0) {
@@ -210,9 +212,14 @@ class PortalController implements ControllerInterface
                 }
                 
                 // Block guest mode (read-only access)
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Authenticate first, then check if user exists
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
                 if ($inviteToken && (!$user || 0 === $user->ID)) {
                     return $this->respond(new WP_Error(
                         'guest_mode_blocked',
@@ -251,9 +258,14 @@ class PortalController implements ControllerInterface
                 }
                 
                 // Block guest mode (read-only access)
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Authenticate first, then check if user exists
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
                 if ($inviteToken && (!$user || 0 === $user->ID)) {
                     return $this->respond(new WP_Error(
                         'guest_mode_blocked',
@@ -291,10 +303,14 @@ class PortalController implements ControllerInterface
                     return $this->respond(new WP_Error('bad_request', __('Invalid estimateId format', 'cheapalarms'), ['status' => 400]));
                 }
 
-                // Force refresh of current user so JWT filters can run
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Authenticate first, then check if user exists
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
 
                 // Block guest mode (read-only access)
                 if ($inviteToken && (!$user || 0 === $user->ID)) {
@@ -339,9 +355,14 @@ class PortalController implements ControllerInterface
                 }
                 
                 // Block guest mode (read-only access)
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Authenticate first, then check if user exists
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
                 if ($inviteToken && (!$user || 0 === $user->ID)) {
                     return $this->respond(new WP_Error(
                         'guest_mode_blocked',
@@ -476,9 +497,15 @@ class PortalController implements ControllerInterface
             'permission_callback' => function (WP_REST_Request $request) {
                 $estimateId = sanitize_text_field($request->get_param('estimateId'));
                 $inviteToken = sanitize_text_field($request->get_param('inviteToken'));
-                if (is_user_logged_in()) {
+                
+                // FIX: Authenticate via JWT first, then check capabilities
+                // This ensures JWT-authenticated users can access test-account endpoint
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
                     return current_user_can('ca_access_portal') || current_user_can('ca_manage_portal');
                 }
+                
                 if (!$estimateId || !$inviteToken) {
                     return false;
                 }
@@ -523,9 +550,14 @@ class PortalController implements ControllerInterface
                 }
 
                 // Validate estimate access (includes locationId validation via getStatus)
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Use direct JWT authentication instead of resetting user context
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
                 $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
                 if (is_wp_error($status)) {
                     return $this->respond($status); // Will return 403 if not authorized or invalid locationId
@@ -568,9 +600,14 @@ class PortalController implements ControllerInterface
                 }
 
                 // Validate estimate access (includes locationId validation via getStatus)
-                global $current_user;
-                $current_user = null;
-                $user = wp_get_current_user();
+                // FIX: Use direct JWT authentication instead of resetting user context
+                $userId = $this->auth->authenticateViaJwt();
+                if ($userId && $userId > 0) {
+                    wp_set_current_user($userId);
+                    $user = wp_get_current_user();
+                } else {
+                    $user = wp_get_current_user();
+                }
                 $status = $this->service->getStatus($estimateId, $locationId, $inviteToken, $user);
                 if (is_wp_error($status)) {
                     return $this->respond($status); // Will return 403 if not authorized or invalid locationId
@@ -606,10 +643,14 @@ class PortalController implements ControllerInterface
      */
     private function validateEstimateAccess(string $estimateId, string $inviteToken = ''): bool|WP_Error
     {
-        // Force refresh of current user so JWT filters can run
-        global $current_user;
-        $current_user = null;
-        $user = wp_get_current_user();
+        // FIX: Use direct JWT authentication instead of resetting user context
+        $userId = $this->auth->authenticateViaJwt();
+        if ($userId && $userId > 0) {
+            wp_set_current_user($userId);
+            $user = wp_get_current_user();
+        } else {
+            $user = wp_get_current_user();
+        }
 
         // If user is authenticated, allow access
         if ($user && $user->ID > 0) {

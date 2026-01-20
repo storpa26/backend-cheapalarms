@@ -145,14 +145,61 @@ class StripeService
             return $result;
         }
 
-        // Check payment status
+        // Check payment status - handle all possible states
         $status = $result['status'] ?? 'unknown';
-        if ($status !== 'succeeded') {
+        
+        // Handle different PaymentIntent states
+        if ($status === 'succeeded') {
+            // Payment succeeded - this is the only successful state
+            // Continue to return success below
+        } elseif ($status === 'processing') {
+            // Payment is being processed asynchronously
+            // This is a valid intermediate state - should wait for webhook
+            $this->logger->info('Stripe payment intent is processing', [
+                'payment_intent_id' => $paymentIntentId,
+                'status' => $status,
+            ]);
+            return new WP_Error('payment_processing', __('Payment is being processed. Please wait for confirmation.', 'cheapalarms'), [
+                'status' => 202, // Accepted - processing
+                'payment_status' => $status,
+            ]);
+        } elseif ($status === 'requires_action') {
+            // Payment requires 3D Secure or other authentication
+            $this->logger->info('Stripe payment intent requires action', [
+                'payment_intent_id' => $paymentIntentId,
+                'status' => $status,
+            ]);
+            return new WP_Error('payment_requires_action', __('Payment requires authentication. Please complete the verification.', 'cheapalarms'), [
+                'status' => 402, // Payment Required
+                'payment_status' => $status,
+            ]);
+        } elseif ($status === 'requires_payment_method' || $status === 'requires_confirmation') {
+            // Payment intent exists but hasn't been confirmed yet
+            $this->logger->warning('Stripe payment intent not yet confirmed', [
+                'payment_intent_id' => $paymentIntentId,
+                'status' => $status,
+            ]);
+            return new WP_Error('payment_not_confirmed', __('Payment has not been confirmed yet.', 'cheapalarms'), [
+                'status' => 400,
+                'payment_status' => $status,
+            ]);
+        } elseif ($status === 'canceled') {
+            // Payment was canceled
+            $this->logger->warning('Stripe payment intent was canceled', [
+                'payment_intent_id' => $paymentIntentId,
+                'status' => $status,
+            ]);
+            return new WP_Error('payment_canceled', __('Payment was canceled.', 'cheapalarms'), [
+                'status' => 400,
+                'payment_status' => $status,
+            ]);
+        } else {
+            // Unknown or unexpected status
             $this->logger->warning('Stripe payment intent not succeeded', [
                 'payment_intent_id' => $paymentIntentId,
                 'status' => $status,
             ]);
-            return new WP_Error('payment_not_succeeded', __('Payment was not successful.', 'cheapalarms'), [
+            return new WP_Error('payment_not_succeeded', sprintf(__('Payment was not successful. Status: %s', 'cheapalarms'), $status), [
                 'status' => 400,
                 'payment_status' => $status,
             ]);

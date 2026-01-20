@@ -324,6 +324,9 @@ class StripeController extends AdminController
         try {
             // FIXED: Generate stable idempotency key (no time() - defeats idempotency)
             // Format: pi_{estimateId}_{amountFixed2}_{currency}_{revisionNumber}
+            // Note: This key ensures that retries of the same request (same estimate, amount, currency, revision)
+            // will reuse the same PaymentIntent, preventing duplicate charges. If the existing PaymentIntent
+            // is succeeded/canceled, the code below will create a new one (bypassing this idempotency key).
             $revisionNumber = $meta['quote']['revisionNumber'] ?? 0;
             $idempotencyKey = sprintf(
                 'pi_%s_%s_%s_%d',
@@ -362,9 +365,22 @@ class StripeController extends AdminController
                     // Check if payment intent is in a reusable state
                     $status = $existingIntent['status'] ?? '';
                     $reusableStates = ['requires_payment_method', 'requires_confirmation'];
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
                     
+                    // SECURITY: Explicitly prevent reusing PaymentIntents that have already succeeded
+                    // This prevents the "payment_intent_unexpected_state" error
+                    if ($status === 'succeeded') {
+                        $logger->info('Payment intent already succeeded, creating new one', [
+                            'estimateId' => $estimateId,
+                            'paymentIntentId' => $existingIntentId,
+                            'status' => $status,
+                        ]);
+                        // Explicitly skip reuse - execution continues below to create new payment intent
+                        // Lock remains active for new payment intent creation (set at line 322)
+                        // Note: This block intentionally falls through - new intent will be created after this if/elseif/else block
+                    }
                     // Only proceed if status is reusable
-                    if (in_array($status, $reusableStates)) {
+                    elseif (in_array($status, $reusableStates)) {
                         // Now check expiry (after confirming status is valid)
                         $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
                         if ($expiresAt && time() < (int)$expiresAt) {
@@ -386,9 +402,8 @@ class StripeController extends AdminController
                         // If expired or no client secret, create new payment intent
                         // Lock remains active (will be used for new intent creation)
                     } else {
-                        // If status is not reusable, create new payment intent
+                        // If status is not reusable (e.g., 'canceled', 'processing', etc.), create new payment intent
                         // Lock remains active (will be used for new intent creation)
-                        $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
                         $logger->info('Payment intent not reusable, creating new one', [
                             'estimateId' => $estimateId,
                             'paymentIntentId' => $existingIntentId,
@@ -522,117 +537,151 @@ class StripeController extends AdminController
             ));
         }
 
-        $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
-        $user = wp_get_current_user();
-        
-        // Verify user has access to this estimate
-        $status = $portalService->getStatus($estimateId, '', null, $user);
-        if (is_wp_error($status)) {
-            return $this->respond(new WP_Error(
-                'unauthorized_estimate',
-                __('You do not have access to this estimate.', 'cheapalarms'),
-                ['status' => 403]
-            ));
-        }
-        
-        // Validate paymentIntentId against stored value in portal meta
-        // Get portal meta via repository to check stored paymentIntentId
-        $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
-        $meta = $portalMetaRepo->get($estimateId);
-        $storedPaymentIntentId = $meta['payment']['paymentIntentId'] ?? null;
-        $storedAmount = $meta['payment']['amount'] ?? null;
-        $invoiceTotal = $meta['payment']['invoiceTotal'] ?? null;
-        $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
-
-        // Expiry check to prevent reusing stale intents
-        if (!empty($expiresAt) && time() > (int) $expiresAt) {
-            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
-            $logger->warning('Payment intent expired', [
-                'estimateId' => $estimateId,
-                'paymentIntentId' => $paymentIntentId,
-                'expiresAt' => $expiresAt,
-            ]);
-            return $this->respond(new WP_Error(
-                'payment_intent_expired',
-                __('Payment intent has expired. Please create a new payment intent.', 'cheapalarms'),
-                ['status' => 400]
-            ));
-        }
-        
-        // SECURITY: Require stored payment intent ID (no null bypass)
-        // This prevents users from confirming payment intents that weren't created for this estimate
-        if (empty($storedPaymentIntentId)) {
-            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
-            $logger->warning('Payment intent confirmation attempted without stored payment intent ID', [
-                'estimateId' => $estimateId,
-                'providedPaymentIntentId' => $paymentIntentId,
-            ]);
-            return $this->respond(new WP_Error(
-                'no_payment_intent',
-                __('No payment intent found for this estimate. Please create a payment intent first.', 'cheapalarms'),
-                ['status' => 400]
-            ));
-        }
-        
-        // SECURITY: Validate payment intent ID matches stored value
-        if ($storedPaymentIntentId !== $paymentIntentId) {
-            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
-            $logger->warning('Payment intent ID mismatch', [
-                'estimateId' => $estimateId,
-                'providedPaymentIntentId' => $paymentIntentId,
-                'storedPaymentIntentId' => $storedPaymentIntentId,
-            ]);
-            return $this->respond(new WP_Error(
-                'payment_intent_mismatch',
-                __('Payment intent does not match this estimate.', 'cheapalarms'),
-                ['status' => 400]
-            ));
-        }
-
-        // Retrieve payment intent from Stripe to verify status and amount
-        $result = $this->stripeService->confirmPaymentIntent($paymentIntentId);
-
-        if (is_wp_error($result)) {
-            return $this->respond($result);
-        }
-
-        // SECURITY: Validate payment intent amount against stored/invoice amount
-        // This prevents confirming payment intents with manipulated amounts
-        $paymentIntentAmount = $result['amount'] ?? 0; // Already converted from cents in StripeService
-        $currency = $result['currency'] ?? 'aud';
-        
-        if ($storedAmount !== null) {
-            // Validate against stored amount (tolerance for floating point precision)
-            if (abs($paymentIntentAmount - $storedAmount) > 0.01) {
+        // SECURITY: Use lock to prevent duplicate confirmations (idempotency)
+        $lockKey = 'ca_confirm_payment_intent_lock_' . $estimateId . '_' . $paymentIntentId;
+        $lockValue = get_transient($lockKey);
+        if ($lockValue !== false) {
+            // Check if lock is stale (older than 10 seconds)
+            $lockAge = time() - (int)$lockValue;
+            if ($lockAge > 10) {
+                delete_transient($lockKey);
+            } else {
+                // Lock is active - another request is confirming this payment intent
                 $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
-                $logger->warning('Payment intent amount mismatch', [
+                $logger->warning('Duplicate payment intent confirmation attempt prevented', [
                     'estimateId' => $estimateId,
-                    'paymentIntentAmount' => $paymentIntentAmount,
-                    'storedAmount' => $storedAmount,
                     'paymentIntentId' => $paymentIntentId,
                 ]);
                 return $this->respond(new WP_Error(
-                    'amount_mismatch',
-                    sprintf(
-                        __('Payment intent amount (%.2f) does not match expected amount (%.2f).', 'cheapalarms'),
-                        $paymentIntentAmount,
-                        $storedAmount
-                    ),
-                    ['status' => 400, 'expectedAmount' => $storedAmount, 'actualAmount' => $paymentIntentAmount]
+                    'processing',
+                    __('Payment confirmation is already in progress. Please wait a moment.', 'cheapalarms'),
+                    ['status' => 409]
                 ));
             }
-        } elseif ($invoiceTotal !== null) {
-            // Fallback: validate against invoice total if stored amount not available
-            if ($paymentIntentAmount > $invoiceTotal) {
-                $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
-                $logger->warning('Payment intent amount exceeds invoice total', [
-                    'estimateId' => $estimateId,
-                    'paymentIntentAmount' => $paymentIntentAmount,
-                    'invoiceTotal' => $invoiceTotal,
-                    'paymentIntentId' => $paymentIntentId,
-                ]);
+        }
+        
+        // Set lock
+        set_transient($lockKey, time(), 10);
+
+        try {
+            $portalService = $this->container->get(\CheapAlarms\Plugin\Services\PortalService::class);
+            $user = wp_get_current_user();
+            
+            // Verify user has access to this estimate
+            $status = $portalService->getStatus($estimateId, '', null, $user);
+            if (is_wp_error($status)) {
+                delete_transient($lockKey);
                 return $this->respond(new WP_Error(
-                    'amount_exceeds_invoice',
+                    'unauthorized_estimate',
+                    __('You do not have access to this estimate.', 'cheapalarms'),
+                    ['status' => 403]
+                ));
+            }
+            
+            // Validate paymentIntentId against stored value in portal meta
+            // Get portal meta via repository to check stored paymentIntentId
+            $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+            $meta = $portalMetaRepo->get($estimateId);
+            $storedPaymentIntentId = $meta['payment']['paymentIntentId'] ?? null;
+            $storedAmount = $meta['payment']['amount'] ?? null;
+            $invoiceTotal = $meta['payment']['invoiceTotal'] ?? null;
+            $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
+
+            // Expiry check to prevent reusing stale intents
+            if (!empty($expiresAt) && time() > (int) $expiresAt) {
+                $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                $logger->warning('Payment intent expired', [
+                    'estimateId' => $estimateId,
+                    'paymentIntentId' => $paymentIntentId,
+                    'expiresAt' => $expiresAt,
+                ]);
+                delete_transient($lockKey);
+                return $this->respond(new WP_Error(
+                    'payment_intent_expired',
+                    __('Payment intent has expired. Please create a new payment intent.', 'cheapalarms'),
+                    ['status' => 400]
+                ));
+            }
+            
+            // SECURITY: Require stored payment intent ID (no null bypass)
+            // This prevents users from confirming payment intents that weren't created for this estimate
+            if (empty($storedPaymentIntentId)) {
+                $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                $logger->warning('Payment intent confirmation attempted without stored payment intent ID', [
+                    'estimateId' => $estimateId,
+                    'providedPaymentIntentId' => $paymentIntentId,
+                ]);
+                delete_transient($lockKey);
+                return $this->respond(new WP_Error(
+                    'no_payment_intent',
+                    __('No payment intent found for this estimate. Please create a payment intent first.', 'cheapalarms'),
+                    ['status' => 400]
+                ));
+            }
+            
+            // SECURITY: Validate payment intent ID matches stored value
+            if ($storedPaymentIntentId !== $paymentIntentId) {
+                $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                $logger->warning('Payment intent ID mismatch', [
+                    'estimateId' => $estimateId,
+                    'providedPaymentIntentId' => $paymentIntentId,
+                    'storedPaymentIntentId' => $storedPaymentIntentId,
+                ]);
+                delete_transient($lockKey);
+                return $this->respond(new WP_Error(
+                    'payment_intent_mismatch',
+                    __('Payment intent does not match this estimate.', 'cheapalarms'),
+                    ['status' => 400]
+                ));
+            }
+
+            // Retrieve payment intent from Stripe to verify status and amount
+            $result = $this->stripeService->confirmPaymentIntent($paymentIntentId);
+
+            if (is_wp_error($result)) {
+                delete_transient($lockKey);
+                return $this->respond($result);
+            }
+
+            // SECURITY: Validate payment intent amount against stored/invoice amount
+            // This prevents confirming payment intents with manipulated amounts
+            $paymentIntentAmount = $result['amount'] ?? 0; // Already converted from cents in StripeService
+            $currency = $result['currency'] ?? 'aud';
+            
+            if ($storedAmount !== null) {
+                // Validate against stored amount (tolerance for floating point precision)
+                if (abs($paymentIntentAmount - $storedAmount) > 0.01) {
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->warning('Payment intent amount mismatch', [
+                        'estimateId' => $estimateId,
+                        'paymentIntentAmount' => $paymentIntentAmount,
+                        'storedAmount' => $storedAmount,
+                        'paymentIntentId' => $paymentIntentId,
+                    ]);
+                    delete_transient($lockKey);
+                    return $this->respond(new WP_Error(
+                        'amount_mismatch',
+                        sprintf(
+                            __('Payment intent amount (%.2f) does not match expected amount (%.2f).', 'cheapalarms'),
+                            $paymentIntentAmount,
+                            $storedAmount
+                        ),
+                        ['status' => 400, 'expectedAmount' => $storedAmount, 'actualAmount' => $paymentIntentAmount]
+                    ));
+                }
+            } elseif ($invoiceTotal !== null) {
+                // Fallback: validate against invoice total if stored amount not available
+                if ($paymentIntentAmount > $invoiceTotal) {
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->warning('Payment intent amount exceeds invoice total', [
+                        'estimateId' => $estimateId,
+                        'paymentIntentAmount' => $paymentIntentAmount,
+                        'invoiceTotal' => $invoiceTotal,
+                        'paymentIntentId' => $paymentIntentId,
+                    ]);
+                    delete_transient($lockKey);
+                    return $this->respond(new WP_Error(
+                        'amount_exceeds_invoice',
                     sprintf(
                         __('Payment intent amount (%.2f) exceeds invoice total (%.2f).', 'cheapalarms'),
                         $paymentIntentAmount,
@@ -643,22 +692,33 @@ class StripeController extends AdminController
             }
         }
 
-        // Update payment records in portal meta
-        $payment = $meta['payment'] ?? [];
-        $payments = $payment['payments'] ?? [];
-        
-        // Check for duplicate payment (idempotency)
-        $isDuplicate = false;
-        $paymentRecord = null;
+            // Update payment records in portal meta
+            $payment = $meta['payment'] ?? [];
+            $payments = $payment['payments'] ?? [];
+            
+            // Check for duplicate payment (idempotency)
+            $isDuplicate = false;
+            $paymentRecord = null;
 
-        foreach ($payments as $existingPayment) {
-            if (($existingPayment['paymentIntentId'] ?? '') === $paymentIntentId) {
-                // Payment already recorded - return existing record
-                $isDuplicate = true;
-                $paymentRecord = $existingPayment;
-                break;
+            foreach ($payments as $existingPayment) {
+                if (($existingPayment['paymentIntentId'] ?? '') === $paymentIntentId) {
+                    // Payment already recorded - return existing record (idempotency)
+                    $isDuplicate = true;
+                    $paymentRecord = $existingPayment;
+                    $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+                    $logger->info('Duplicate payment confirmation detected and prevented', [
+                        'estimateId' => $estimateId,
+                        'paymentIntentId' => $paymentIntentId,
+                    ]);
+                    delete_transient($lockKey);
+                    return $this->respond([
+                        'ok' => true,
+                        'paymentIntent' => $result,
+                        'payment' => $paymentRecord,
+                        'duplicate' => true,
+                    ]);
+                }
             }
-        }
 
         if (!$isDuplicate) {
             // Determine payment type
@@ -681,33 +741,51 @@ class StripeController extends AdminController
                 'refundAmount' => null,
             ];
             
-            $payments[] = $paymentRecord;
-        }
+                $payments[] = $paymentRecord;
+            }
 
-        // Compute totals using helper method
-        $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? $invoiceTotal ?? 0;
-        $totals = $this->computePaymentTotals($payments, $invoiceTotal);
+            // Compute totals using helper method
+            $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? $invoiceTotal ?? 0;
+            $totals = $this->computePaymentTotals($payments, $invoiceTotal);
 
-        // Update payment meta
-        $paymentUpdate = [
-            'payment' => array_merge($payment, [
-                'payments' => $payments,
-                'totalPaid' => $totals['totalPaid'],
-                'remainingBalance' => $totals['remainingBalance'],
-                'isFullyPaid' => $totals['isFullyPaid'],
-                'hasDepositPaid' => $totals['hasDepositPaid'],
-                'depositPaidAt' => $totals['depositPaidAt'],
-                'status' => $totals['status'],
-                // Backward compatibility
+            // Update payment meta
+            $paymentUpdate = [
+                'payment' => array_merge($payment, [
+                    'payments' => $payments,
+                    'totalPaid' => $totals['totalPaid'],
+                    'remainingBalance' => $totals['remainingBalance'],
+                    'isFullyPaid' => $totals['isFullyPaid'],
+                    'hasDepositPaid' => $totals['hasDepositPaid'],
+                    'depositPaidAt' => $totals['depositPaidAt'],
+                    'status' => $totals['status'],
+                    // Backward compatibility
+                    'paymentIntentId' => $paymentIntentId,
+                    'amount' => $paymentIntentAmount,
+                    'invoiceTotal' => $invoiceTotal,
+                ]),
+            ];
+
+            $portalMetaRepo->merge($estimateId, $paymentUpdate);
+
+            // Release lock before returning success
+            delete_transient($lockKey);
+
+            return $this->respond($result);
+        } catch (\Exception $e) {
+            // Release lock on exception
+            delete_transient($lockKey);
+            $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
+            $logger->error('Exception during payment intent confirmation', [
+                'estimateId' => $estimateId,
                 'paymentIntentId' => $paymentIntentId,
-                'amount' => $paymentIntentAmount,
-                'invoiceTotal' => $invoiceTotal,
-            ]),
-        ];
-
-        $portalMetaRepo->merge($estimateId, $paymentUpdate);
-
-        return $this->respond($result);
+                'error' => $e->getMessage(),
+            ]);
+            return $this->respond(new WP_Error(
+                'payment_intent_confirmation_error',
+                __('An error occurred while confirming payment intent. Please try again.', 'cheapalarms'),
+                ['status' => 500]
+            ));
+        }
     }
 
     /**

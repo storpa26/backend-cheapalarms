@@ -43,9 +43,8 @@ class UsersController implements ControllerInterface
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
                 // Ensure user is loaded before capability checks (JWT timing)
-                global $current_user;
-                $current_user = null;
-                wp_get_current_user();
+                // FIX: Use ensureUserLoaded() which now uses authenticateViaJwt()
+                $this->auth->ensureUserLoaded();
 
                 $authCheck = $this->auth->requireCapability('ca_manage_portal');
                 if (is_wp_error($authCheck)) {
@@ -63,9 +62,8 @@ class UsersController implements ControllerInterface
             'permission_callback' => fn () => true,
             'callback'            => function (WP_REST_Request $request) {
                 // Ensure user is loaded before capability checks (JWT timing)
-                global $current_user;
-                $current_user = null;
-                wp_get_current_user();
+                // FIX: Use ensureUserLoaded() which now uses authenticateViaJwt()
+                $this->auth->ensureUserLoaded();
 
                 $authCheck = $this->auth->requireCapability('ca_manage_portal');
                 if (is_wp_error($authCheck)) {
@@ -195,9 +193,8 @@ class UsersController implements ControllerInterface
     public function deleteUser(WP_REST_Request $request): WP_REST_Response
     {
         // Ensure user is loaded before capability checks (JWT timing)
-        global $current_user;
-        $current_user = null;
-        wp_get_current_user();
+        // FIX: Use ensureUserLoaded() which now uses authenticateViaJwt()
+        $this->auth->ensureUserLoaded();
 
         // Ensure wp_delete_user is available in REST context
         if (!function_exists('wp_delete_user')) {
