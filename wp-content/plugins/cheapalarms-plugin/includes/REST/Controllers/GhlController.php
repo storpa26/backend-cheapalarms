@@ -319,6 +319,10 @@ class GhlController implements ControllerInterface
                 }
 
                 $effectiveFromEmail = $fromEmail ?: get_option('ghl_from_email', 'quotes@cheapalarms.dev');
+                
+                // Format email with display name: "CheapAlarms <email@domain.com>"
+                // This ensures email clients show "CheapAlarms" instead of just "quotes" or the email address
+                $effectiveFromEmailWithName = 'CheapAlarms <' . $effectiveFromEmail . '>';
 
                 $payload = [
                     'contactId' => $contactId,
@@ -327,7 +331,7 @@ class GhlController implements ControllerInterface
                     'subject' => $subject,
                     'html' => !empty($html) ? $html : null,
                     'message' => !empty($text) ? $text : null,
-                    'emailFrom' => $effectiveFromEmail,
+                    'emailFrom' => $effectiveFromEmailWithName, // Format: "CheapAlarms <quotes@cheapalarms.com.au>"
                 ];
 
                 if ($config->getLocationId()) {

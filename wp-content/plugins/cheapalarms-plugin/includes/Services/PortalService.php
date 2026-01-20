@@ -315,6 +315,8 @@ class PortalService
         }
 
         // Calculate minimum payment info for invoice (if invoice exists)
+        // FIX A: Always calculate minimumPaymentInfo when invoice exists (contract guarantee)
+        // This ensures frontend always has the data structure, preventing null checks from failing
         $minimumPaymentInfo = null;
         $invoice = $meta['invoice'] ?? null;
         $payment = $meta['payment'] ?? null;
@@ -328,26 +330,51 @@ class PortalService
                 $invoiceTotal = (float) $invoice['total'];
             }
 
-            if ($invoiceTotal !== null && $invoiceTotal > 0) {
-                // Calculate existing paid amount (excluding refunded payments)
-                // FIXED: Use shared helper method for consistency
-                $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
+            // FIX A: Always calculate minimumPaymentInfo if invoice exists, even if total is 0 or null
+            // This turns minimumPaymentInfo from an optional helper into a stable contract
+            // Frontend depends on this structure, so we must always provide it
+            $invoiceTotal = $invoiceTotal ?? 0; // Default to 0 if null
+            
+            // Calculate existing paid amount (excluding refunded payments)
+            // FIXED: Use shared helper method for consistency
+            $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
 
-                // Calculate minimum payment using same logic as StripeController
-                $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
-                $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
-                $isFirstPayment = ($existingPaidAmount == 0);
-                $isSubsequentPayment = !$isFirstPayment; // Second payment (after work) - requires full payment
+            // Calculate minimum payment using same logic as StripeController
+            $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
+            $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+            $isFirstPayment = ($existingPaidAmount == 0);
+            $isSubsequentPayment = !$isFirstPayment; // Second payment (after work) - requires full payment
 
-                $minimumPaymentInfo = [
-                    'minimumPayment' => $minimumPayment,
+            $minimumPaymentInfo = [
+                'minimumPayment' => $minimumPayment,
+                'remainingBalance' => $remainingBalance,
+                'isFirstPayment' => $isFirstPayment,
+                'isSubsequentPayment' => $isSubsequentPayment, // Flag for frontend to hide partial options
+                'requiresFullPayment' => $isSubsequentPayment, // Second payment must be full
+                'invoiceTotal' => $invoiceTotal,
+                'existingPaidAmount' => $existingPaidAmount,
+            ];
+            
+            // FIX B: Ensure payment.remainingBalance is set if missing (repair on read)
+            // This handles legacy data and edge cases where remainingBalance wasn't set
+            if ($payment && !isset($payment['remainingBalance'])) {
+                $payment['remainingBalance'] = $remainingBalance;
+                // Update meta to persist this repair
+                $meta['payment'] = $payment;
+                $this->logger->info('Repaired missing payment.remainingBalance in getStatus', [
+                    'estimateId' => $estimateId,
                     'remainingBalance' => $remainingBalance,
-                    'isFirstPayment' => $isFirstPayment,
-                    'isSubsequentPayment' => $isSubsequentPayment, // Flag for frontend to hide partial options
-                    'requiresFullPayment' => $isSubsequentPayment, // Second payment must be full
-                    'invoiceTotal' => $invoiceTotal,
-                    'existingPaidAmount' => $existingPaidAmount,
-                ];
+                ]);
+                
+                // Optional: Log contract violations in dev/staging for monitoring
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('[PortalStatus] Contract violation: payment.remainingBalance was missing and has been repaired for estimate ' . $estimateId);
+                }
+            }
+            
+            // Optional: Log if minimumPaymentInfo is still null after calculation (should never happen with Fix A)
+            if ($minimumPaymentInfo === null && defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[PortalStatus] Contract violation: minimumPaymentInfo is null for invoice on estimate ' . $estimateId . ' - this should not happen');
             }
             
             // CRITICAL FIX: Override invoice status with payment-calculated status
@@ -1495,23 +1522,32 @@ class PortalService
                 // SECURITY: Check if this payment intent was already used (prevent duplicate payment intent usage)
                 // This check must come FIRST before checking stored payment intent ID, because after a payment
                 // is confirmed, the paymentIntentId is cleared to allow new payment intents
+                // CRITICAL FIX: Check by BOTH transactionId AND paymentIntentId to prevent duplicates
+                // StripeController creates records with paymentIntentId but no transactionId
+                // PortalService creates records with transactionId but no paymentIntentId
+                // This causes duplicate records and double-counting of amounts
                 $existingPayments = $meta['payment']['payments'] ?? [];
+                $existingPaymentIndex = null;
+                $existingPaymentRecord = null;
+                
                 if (is_array($existingPayments)) {
-                    foreach ($existingPayments as $prevPayment) {
-                        if (!empty($prevPayment['transactionId']) && $prevPayment['transactionId'] === $transactionId) {
-                            delete_transient($lockKey);
-                            $this->logger->warning('Payment intent already used', [
-                                'estimateId' => $estimateId,
-                                'transactionId' => $transactionId,
-                            ]);
-                            return new WP_Error(
-                                'payment_intent_already_used',
-                                __('This payment intent has already been used. Please create a new payment intent for additional payments.', 'cheapalarms'),
-                                ['status' => 400]
-                            );
+                    foreach ($existingPayments as $index => $prevPayment) {
+                        // Check by transactionId (for PortalService records)
+                        $matchesTransactionId = !empty($prevPayment['transactionId']) && $prevPayment['transactionId'] === $transactionId;
+                        // Check by paymentIntentId (for StripeController records)
+                        // For Stripe, transactionId IS the paymentIntentId
+                        $matchesPaymentIntentId = !empty($prevPayment['paymentIntentId']) && $prevPayment['paymentIntentId'] === $transactionId;
+                        
+                        if ($matchesTransactionId || $matchesPaymentIntentId) {
+                            $existingPaymentIndex = $index;
+                            $existingPaymentRecord = $prevPayment;
+                            break;
                         }
                     }
                 }
+                
+                // If payment record already exists, we'll update it instead of creating a duplicate
+                // This prevents double-counting the same payment
                 
                 // SECURITY: Validate transactionId matches stored payment intent ID (if one exists)
                 // Note: After a payment is confirmed, paymentIntentId is cleared to allow new payment intents
@@ -1595,11 +1631,25 @@ class PortalService
             // FIXED: Use consistent logic with StripeController (exclude refunded payments)
             $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
             
-            $totalPaidAmount = $existingPaidAmount + $amount;
+            // CRITICAL FIX: If payment record already exists (from StripeController), don't add amount again
+            // The amount is already included in $existingPaidAmount, so adding it again would double-count
+            if ($existingPaymentRecord) {
+                // Use existing amount from the record (already in $existingPaidAmount)
+                $amount = (float) ($existingPaymentRecord['amount'] ?? $amount);
+                // Don't add amount again - it's already in $existingPaidAmount
+                $totalPaidAmount = $existingPaidAmount;
+            } else {
+                // No existing record - add amount normally
+                $totalPaidAmount = $existingPaidAmount + $amount;
+            }
             
             // SECURITY: Validate cumulative payment amount against invoice total
             // Allow partial payments (up to invoice total), but prevent overpayment
-            if ($totalPaidAmount > $invoiceTotal) {
+            // Use tolerance for floating point precision (0.01 = 1 cent)
+            // This prevents false positives when amounts are equal within rounding error
+            // Matches the tolerance pattern used for isFullyPaid check (line 1674)
+            $tolerance = 0.01;
+            if ($totalPaidAmount > ($invoiceTotal + $tolerance)) {
                 delete_transient($lockKey);
                 
                 // If Stripe already charged, attempt a refund to avoid over-collection
@@ -1654,26 +1704,64 @@ class PortalService
 
             // Update payment data
             // Track individual payments for partial payment support
-            $paymentRecord = [
-                'amount' => $amount,
-                'provider' => sanitize_text_field($paymentData['provider'] ?? 'mock'),
-                'transactionId' => sanitize_text_field($paymentData['transactionId'] ?? null),
-                'paidAt' => current_time('mysql'),
-            ];
-            
-            // Initialize payments array if it doesn't exist
+            // CRITICAL FIX: If payment record already exists, UPDATE it instead of creating duplicate
             $payments = $meta['payment']['payments'] ?? [];
             if (!is_array($payments)) {
                 $payments = [];
             }
             
-            // Add this payment to the payments array
-            $payments[] = $paymentRecord;
+            if ($existingPaymentRecord) {
+                // Payment record already exists from StripeController - UPDATE it instead of creating duplicate
+                $this->logger->info('Updating existing payment record instead of creating duplicate', [
+                    'estimateId' => $estimateId,
+                    'transactionId' => $transactionId,
+                    'existingIndex' => $existingPaymentIndex,
+                ]);
+                
+                // Update existing record with any missing fields
+                if (!isset($existingPaymentRecord['transactionId']) && !empty($transactionId)) {
+                    $existingPaymentRecord['transactionId'] = sanitize_text_field($transactionId);
+                }
+                if (!isset($existingPaymentRecord['paymentIntentId']) && $provider === 'stripe' && !empty($transactionId)) {
+                    $existingPaymentRecord['paymentIntentId'] = sanitize_text_field($transactionId);
+                }
+                if (!isset($existingPaymentRecord['provider'])) {
+                    $existingPaymentRecord['provider'] = sanitize_text_field($paymentData['provider'] ?? 'mock');
+                }
+                if (!isset($existingPaymentRecord['paidAt'])) {
+                    $existingPaymentRecord['paidAt'] = current_time('mysql');
+                }
+                
+                // Update the payment record in the array
+                $payments[$existingPaymentIndex] = $existingPaymentRecord;
+            } else {
+                // No existing payment record - create new one
+                $paymentRecord = [
+                    'amount' => $amount,
+                    'provider' => sanitize_text_field($paymentData['provider'] ?? 'mock'),
+                    'transactionId' => sanitize_text_field($paymentData['transactionId'] ?? null),
+                    'paidAt' => current_time('mysql'),
+                ];
+                
+                // Add paymentIntentId for Stripe payments so webhook can find existing records
+                // This prevents duplicate payment records when webhook fires after confirmPayment
+                if ($provider === 'stripe' && !empty($transactionId)) {
+                    // For Stripe, transactionId IS the paymentIntentId
+                    $paymentRecord['paymentIntentId'] = sanitize_text_field($transactionId);
+                    $paymentRecord['status'] = 'succeeded'; // Mark as succeeded (webhook will update if needed)
+                }
+                
+                // Add this payment to the payments array
+                $payments[] = $paymentRecord;
+            }
             
             // Determine if invoice is fully paid
             $isFullyPaid = abs($totalPaidAmount - $invoiceTotal) < 0.01; // Tolerance for floating point
             
             // Update payment data structure
+            // FIX B: Always set remainingBalance (contract guarantee)
+            // This ensures payment.remainingBalance is always available for frontend logic
+            $remainingBalance = max(0, $invoiceTotal - $totalPaidAmount);
             $payment = [
                 'amount' => $totalPaidAmount, // Total amount paid (cumulative)
                 'status' => $isFullyPaid ? 'paid' : 'partial',
@@ -1682,7 +1770,7 @@ class PortalService
                 'paidAt' => current_time('mysql'),
                 'payments' => $payments, // Array of individual payment records
                 'invoiceTotal' => $invoiceTotal,
-                'remainingBalance' => max(0, $invoiceTotal - $totalPaidAmount),
+                'remainingBalance' => $remainingBalance, // Always set - required for frontend contract
                 // SECURITY: Clear paymentIntentId after payment is confirmed to allow creating new payment intents
                 // The payment intent ID is preserved in the payments array for tracking
                 'paymentIntentId' => null,
@@ -1860,12 +1948,38 @@ class PortalService
                 $this->sendPaymentConfirmationEmail($estimateId, $locationId, $payment);
             }
 
+            // FIX B (Secondary): Calculate minimumPaymentInfo for immediate UI update
+            // This allows frontend to update UI immediately without waiting for next getStatus() fetch
+            // Use fresh meta after payment update to ensure invoice data is current
+            $meta = $this->getMeta($estimateId); // Refresh meta to get updated invoice
+            $minimumPaymentInfo = null;
+            if (isset($meta['invoice'])) {
+                $invoice = $meta['invoice'];
+                // Recalculate with updated payment data
+                $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
+                $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
+                $remainingBalance = max(0, $invoiceTotal - $totalPaidAmount);
+                $isFirstPayment = ($existingPaidAmount == 0);
+                $isSubsequentPayment = !$isFirstPayment;
+                
+                $minimumPaymentInfo = [
+                    'minimumPayment' => $minimumPayment,
+                    'remainingBalance' => $remainingBalance,
+                    'isFirstPayment' => $isFirstPayment,
+                    'isSubsequentPayment' => $isSubsequentPayment,
+                    'requiresFullPayment' => $isSubsequentPayment,
+                    'invoiceTotal' => $invoiceTotal,
+                    'existingPaidAmount' => $existingPaidAmount,
+                ];
+            }
+
             return [
                 'ok' => true,
                 'payment' => $payment,
                 'workflow' => $workflow,
                 'isFullyPaid' => $isFullyPaid,
                 'remainingBalance' => max(0, $invoiceTotal - $totalPaidAmount),
+                'minimumPaymentInfo' => $minimumPaymentInfo, // Include for immediate UI update
             ];
         } catch (\Exception $e) {
             // Release lock on error
@@ -2698,6 +2812,10 @@ class PortalService
             $ghlClient = $this->container->get(GhlClient::class);
             $fromEmail = get_option('ghl_from_email', 'quotes@cheapalarms.com.au');
             
+            // Format email with display name: "CheapAlarms <email@domain.com>"
+            // This ensures email clients show "CheapAlarms" instead of just "quotes" or the email address
+            $fromEmailWithName = 'CheapAlarms <' . $fromEmail . '>';
+            
             // Ensure subject is never empty (GHL might use from email as fallback)
             if (empty($subject) || trim($subject) === '') {
                 $subject = __('CheapAlarms Notification', 'cheapalarms');
@@ -2709,7 +2827,7 @@ class PortalService
                 'status' => 'pending',
                 'subject' => $subject,
                 'html' => $htmlBody,
-                'emailFrom' => $fromEmail,
+                'emailFrom' => $fromEmailWithName, // Format: "CheapAlarms <quotes@cheapalarms.com.au>"
             ];
             
             if ($this->config->getLocationId()) {
@@ -3944,10 +4062,33 @@ class PortalService
             $estimateNumber = sanitize_text_field($estimate['estimateNumber'] ?? $estimateId);
             $portalUrl = $this->resolvePortalUrl($estimateId);
             
-            // Format payment amount
-            $amount = $payment['amount'] ?? 0;
+            // CRITICAL FIX: Get current payment amount from payments array, not cumulative total
+            // $payment['amount'] is the cumulative total of all payments, not the current payment
+            // For partial payments, we need to show the current payment amount, not the total
+            $payments = $payment['payments'] ?? [];
+            $currentPaymentAmount = 0;
+            if (!empty($payments) && is_array($payments)) {
+                // Get the last payment (most recent) - this is the current payment
+                $lastPayment = end($payments);
+                $currentPaymentAmount = (float) ($lastPayment['amount'] ?? 0);
+            }
+            
+            // Fallback to payment['amount'] if payments array is empty (backward compatibility)
+            if ($currentPaymentAmount <= 0) {
+                $currentPaymentAmount = (float) ($payment['amount'] ?? 0);
+            }
+            
+            // Get total paid and remaining balance for email context
+            $totalPaid = (float) ($payment['amount'] ?? 0); // Cumulative total
+            $remainingBalance = (float) ($payment['remainingBalance'] ?? 0);
+            $invoiceTotal = (float) ($payment['invoiceTotal'] ?? 0);
+            $isPartialPayment = ($payment['status'] ?? '') === 'partial';
+            
             $currency = 'AUD';
-            $formattedAmount = number_format((float)$amount, 2);
+            $formattedAmount = number_format($currentPaymentAmount, 2);
+            $formattedTotalPaid = number_format($totalPaid, 2);
+            $formattedRemainingBalance = number_format($remainingBalance, 2);
+            $formattedInvoiceTotal = number_format($invoiceTotal, 2);
             
             // Format payment date
             $paidAt = $payment['paidAt'] ?? current_time('mysql');
@@ -3987,7 +4128,11 @@ class PortalService
                 $emailData = [
                     'customerName' => $customerName,
                     'estimateNumber' => $estimateNumber,
-                    'paymentAmount' => $amount,
+                    'paymentAmount' => $currentPaymentAmount, // Current payment amount, not cumulative
+                    'invoiceTotal' => $invoiceTotal, // Full invoice total
+                    'totalPaid' => $totalPaid, // Cumulative total paid
+                    'remainingBalance' => $remainingBalance, // Remaining balance
+                    'isPartialPayment' => $isPartialPayment, // Whether this is a partial payment
                     'currency' => $currency,
                     'transactionId' => $payment['transactionId'] ?? '',
                     'paidAt' => $paidAt,
@@ -4007,7 +4152,11 @@ class PortalService
                     $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
                     $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
                     $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
-                    $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                    $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount Paid:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                    if ($isPartialPayment) {
+                        $body .= '<p style="margin: 4px 0;">📊 <strong>' . esc_html(__('Total Paid:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedTotalPaid) . ' ' . esc_html(sprintf(__('of %s', 'cheapalarms'), $currency . ' $' . $formattedInvoiceTotal)) . '</p>';
+                        $body .= '<p style="margin: 4px 0;">💳 <strong>' . esc_html(__('Remaining Balance:', 'cheapalarms')) . '</strong> <strong style="color: #c95375;">' . esc_html($currency . ' $' . $formattedRemainingBalance) . '</strong></p>';
+                    }
                     if ($payment['transactionId'] ?? null) {
                         $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
                     }
@@ -4037,7 +4186,11 @@ class PortalService
                 $body .= '<p>' . esc_html(__('Your payment has been successfully processed!', 'cheapalarms')) . '</p>';
                 $body .= '<div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 20px 0;">';
                 $body .= '<p style="margin: 0 0 8px 0;"><strong>' . esc_html(__('Payment Details:', 'cheapalarms')) . '</strong></p>';
-                $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                $body .= '<p style="margin: 4px 0;">💰 <strong>' . esc_html(__('Amount Paid:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedAmount) . '</p>';
+                if ($isPartialPayment) {
+                    $body .= '<p style="margin: 4px 0;">📊 <strong>' . esc_html(__('Total Paid:', 'cheapalarms')) . '</strong> ' . esc_html($currency . ' $' . $formattedTotalPaid) . ' ' . esc_html(sprintf(__('of %s', 'cheapalarms'), $currency . ' $' . $formattedInvoiceTotal)) . '</p>';
+                    $body .= '<p style="margin: 4px 0;">💳 <strong>' . esc_html(__('Remaining Balance:', 'cheapalarms')) . '</strong> <strong style="color: #c95375;">' . esc_html($currency . ' $' . $formattedRemainingBalance) . '</strong></p>';
+                }
                 if ($payment['transactionId'] ?? null) {
                     $body .= '<p style="margin: 4px 0;">📄 <strong>' . esc_html(__('Transaction ID:', 'cheapalarms')) . '</strong> ' . esc_html($payment['transactionId']) . '</p>';
                 }

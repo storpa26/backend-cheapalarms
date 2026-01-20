@@ -53,6 +53,13 @@ class StripeController extends AdminController
             'callback' => fn (WP_REST_Request $request) => $this->getClientSecret($request),
         ]);
 
+        // Check payment intent status (for pre-confirmation validation)
+        register_rest_route('ca/v1', '/stripe/check-payment-intent-status', [
+            'methods' => 'POST',
+            'permission_callback' => fn () => $this->requirePortalOrAdmin(),
+            'callback' => fn (WP_REST_Request $request) => $this->checkPaymentIntentStatus($request),
+        ]);
+
         // Handle Stripe webhook events
         register_rest_route('ca/v1', '/stripe/webhook', [
             'methods' => 'POST',
@@ -508,6 +515,38 @@ class StripeController extends AdminController
         ]);
     }
 
+    /**
+     * Check PaymentIntent status before confirmation
+     * Used to prevent reusing already-succeeded PaymentIntents
+     * 
+     * @param WP_REST_Request $request
+     * @return WP_REST_Response
+     */
+    private function checkPaymentIntentStatus(WP_REST_Request $request): WP_REST_Response
+    {
+        $body = $request->get_json_params();
+        $paymentIntentId = sanitize_text_field($body['paymentIntentId'] ?? '');
+        
+        if (empty($paymentIntentId)) {
+            return $this->respond(new WP_Error('missing_payment_intent_id', __('Payment intent ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+        
+        // Retrieve payment intent from Stripe
+        $paymentIntent = $this->stripeService->getPaymentIntent($paymentIntentId);
+        
+        if (is_wp_error($paymentIntent)) {
+            return $this->respond($paymentIntent);
+        }
+        
+        $status = $paymentIntent['status'] ?? 'unknown';
+        
+        return $this->respond([
+            'ok' => true,
+            'status' => $status,
+            'paymentIntent' => $paymentIntent,
+        ]);
+    }
+
     private function confirmPaymentIntent(WP_REST_Request $request): WP_REST_Response
     {
         $body = $request->get_json_params();
@@ -671,7 +710,10 @@ class StripeController extends AdminController
                 }
             } elseif ($invoiceTotal !== null) {
                 // Fallback: validate against invoice total if stored amount not available
-                if ($paymentIntentAmount > $invoiceTotal) {
+                // Use tolerance for floating point precision (0.01 = 1 cent)
+                // This prevents false positives when amounts are equal within rounding error
+                $tolerance = 0.01;
+                if ($paymentIntentAmount > ($invoiceTotal + $tolerance)) {
                     $logger = $this->container->get(\CheapAlarms\Plugin\Services\Logger::class);
                     $logger->warning('Payment intent amount exceeds invoice total', [
                         'estimateId' => $estimateId,
@@ -748,6 +790,34 @@ class StripeController extends AdminController
             $invoiceTotal = $meta['invoice']['total'] ?? $meta['invoice']['ghl']['total'] ?? $invoiceTotal ?? 0;
             $totals = $this->computePaymentTotals($payments, $invoiceTotal);
 
+            // Update workflow status based on payment status
+            $workflow = $meta['workflow'] ?? [];
+            if ($totals['isFullyPaid']) {
+                $workflow['status'] = 'paid';
+                $workflow['currentStep'] = 5;
+                $workflow['paidAt'] = current_time('mysql');
+            } else {
+                // Keep status as "booked" if partial payment (or keep existing if no payment yet)
+                if ($totals['totalPaid'] > 0) {
+                    $workflow['status'] = 'booked';
+                }
+                // Otherwise keep existing status (might be 'accepted')
+            }
+            
+            // Preserve existing timestamps (consistent with PortalService.php)
+            if (!isset($workflow['requestedAt']) && isset($meta['workflow']['requestedAt'])) {
+                $workflow['requestedAt'] = $meta['workflow']['requestedAt'];
+            }
+            if (!isset($workflow['reviewedAt']) && isset($meta['workflow']['reviewedAt'])) {
+                $workflow['reviewedAt'] = $meta['workflow']['reviewedAt'];
+            }
+            if (!isset($workflow['acceptedAt']) && isset($meta['workflow']['acceptedAt'])) {
+                $workflow['acceptedAt'] = $meta['workflow']['acceptedAt'];
+            }
+            if (!isset($workflow['bookedAt']) && isset($meta['workflow']['bookedAt'])) {
+                $workflow['bookedAt'] = $meta['workflow']['bookedAt'];
+            }
+
             // Update payment meta
             $paymentUpdate = [
                 'payment' => array_merge($payment, [
@@ -758,14 +828,20 @@ class StripeController extends AdminController
                     'hasDepositPaid' => $totals['hasDepositPaid'],
                     'depositPaidAt' => $totals['depositPaidAt'],
                     'status' => $totals['status'],
+                    // FIXED: Clear paymentIntentId after payment is confirmed to allow creating new payment intents
+                    // The payment intent ID is preserved in the payments array for tracking
+                    'paymentIntentId' => null,
+                    'paymentIntentExpiresAt' => null,
                     // Backward compatibility
-                    'paymentIntentId' => $paymentIntentId,
                     'amount' => $paymentIntentAmount,
                     'invoiceTotal' => $invoiceTotal,
                 ]),
             ];
 
-            $portalMetaRepo->merge($estimateId, $paymentUpdate);
+            // FIXED: Also update workflow status
+            $portalMetaRepo->merge($estimateId, array_merge($paymentUpdate, [
+                'workflow' => $workflow,
+            ]));
 
             // Release lock before returning success
             delete_transient($lockKey);

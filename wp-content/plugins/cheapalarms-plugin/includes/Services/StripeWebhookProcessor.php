@@ -126,11 +126,21 @@ class StripeWebhookProcessor
         $payments = $payment['payments'] ?? [];
         
         // Find or create payment record
+        // CRITICAL FIX: Search by BOTH paymentIntentId AND transactionId (as fallback)
+        // PortalService creates records with transactionId but no paymentIntentId
+        // StripeController creates records with paymentIntentId but no transactionId
+        // This ensures we find existing records regardless of which system created them
         $paymentRecord = null;
         $paymentIndex = null;
         
         foreach ($payments as $index => $p) {
-            if (($p['paymentIntentId'] ?? '') === $paymentIntentId) {
+            // Search by paymentIntentId (preferred - matches StripeController records)
+            $hasPaymentIntentId = ($p['paymentIntentId'] ?? '') === $paymentIntentId;
+            // Search by transactionId (fallback - matches PortalService records)
+            // For Stripe, transactionId IS the paymentIntentId
+            $hasTransactionId = ($p['transactionId'] ?? '') === $paymentIntentId;
+            
+            if ($hasPaymentIntentId || $hasTransactionId) {
                 $paymentRecord = $p;
                 $paymentIndex = $index;
                 break;
