@@ -1418,11 +1418,12 @@ class PortalService
 
         // SECURITY: Use lock to prevent race conditions during payment confirmation
         $lockKey = 'ca_payment_lock_' . $estimateId;
+        $lockTtl = 120; // TTL in seconds - must cover Stripe API + Xero sync operations
         $lockValue = get_transient($lockKey);
         if ($lockValue !== false) {
-            // Check if lock is stale (older than 10 seconds - previous process likely crashed)
+            // Check if lock is stale (older than TTL - previous process likely crashed)
             $lockAge = time() - (int)$lockValue;
-            if ($lockAge > 10) {
+            if ($lockAge > $lockTtl) {
                 // Lock is stale - clear it and proceed
                 delete_transient($lockKey);
                 $this->logger->warning('Cleared stale payment confirmation lock', [
@@ -1431,17 +1432,8 @@ class PortalService
                 ]);
             } else {
                 // Lock is active - another request is processing
-                // Check if payment was already confirmed
-                $meta = $this->getMeta($estimateId);
-                $existingPayment = $meta['payment'] ?? null;
-                if (!empty($existingPayment['status']) && $existingPayment['status'] === 'paid') {
-                    return [
-                        'ok' => true,
-                        'payment' => $existingPayment,
-                        'alreadyPaid' => true,
-                    ];
-                }
-                // If not paid yet, return error to prevent duplicate processing
+                // Always return 409 to prevent blocking invoice finalize + Xero sync
+                // The idempotency logic below will handle duplicate confirmed transactions
                 return new WP_Error(
                     'processing',
                     __('Another request is currently processing this payment. Please wait a moment and try again.', 'cheapalarms'),
@@ -1450,8 +1442,8 @@ class PortalService
             }
         }
         
-        // Set lock with timestamp
-        set_transient($lockKey, time(), 10);
+        // Set lock with timestamp (covers Stripe API + Xero sync operations)
+        set_transient($lockKey, time(), $lockTtl);
 
         try {
             $locationId = $locationId ?: $this->config->getLocationId();
@@ -1465,7 +1457,6 @@ class PortalService
             $canPay = ($workflowStatus === 'accepted' || $workflowStatus === 'booked' || $quoteStatus === 'accepted');
             
             if (!$canPay) {
-                delete_transient($lockKey);
                 return new WP_Error(
                     'invalid_status',
                     __('Estimate must be accepted before payment. Current status: ' . $workflowStatus, 'cheapalarms'),
@@ -1476,7 +1467,6 @@ class PortalService
             // Get invoice to validate payment amount
             $invoice = $meta['invoice'] ?? null;
             if (!$invoice) {
-                delete_transient($lockKey);
                 return new WP_Error('bad_request', __('Invoice not found for this estimate', 'cheapalarms'), ['status' => 400]);
             }
             
@@ -1489,7 +1479,6 @@ class PortalService
             }
             
             if ($invoiceTotal === null || $invoiceTotal <= 0) {
-                delete_transient($lockKey);
                 return new WP_Error('bad_request', __('Invalid invoice total. Cannot process payment.', 'cheapalarms'), ['status' => 400]);
             }
             
@@ -1504,7 +1493,6 @@ class PortalService
             if ($provider === 'stripe' && !empty($transactionId)) {
                 $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
                 if (!empty($expiresAt) && time() > (int) $expiresAt) {
-                    delete_transient($lockKey);
                     return new WP_Error(
                         'payment_intent_expired',
                         __('Payment intent has expired. Please create a new payment intent.', 'cheapalarms'),
@@ -1569,7 +1557,6 @@ class PortalService
                 // So this check only applies if a payment intent was recently created but not yet confirmed
                 $storedPaymentIntentId = $meta['payment']['paymentIntentId'] ?? null;
                 if (!empty($storedPaymentIntentId) && $transactionId !== $storedPaymentIntentId) {
-                    delete_transient($lockKey);
                     $this->logger->warning('Transaction ID mismatch in payment confirmation', [
                         'estimateId' => $estimateId,
                         'providedTransactionId' => $transactionId,
@@ -1588,7 +1575,6 @@ class PortalService
                 $paymentIntentResult = $stripeService->getPaymentIntent($transactionId);
                 
                 if (is_wp_error($paymentIntentResult)) {
-                    delete_transient($lockKey);
                     $this->logger->error('Failed to retrieve payment intent from Stripe', [
                         'estimateId' => $estimateId,
                         'paymentIntentId' => $transactionId,
@@ -1622,7 +1608,6 @@ class PortalService
                     // Continue to create payment record - webhook will update status when processing completes
                 } else {
                     // Payment not in a valid state
-                    delete_transient($lockKey);
                     return new WP_Error(
                         'payment_not_succeeded',
                         sprintf(__('Payment was not successful. Status: %s. Please try again.', 'cheapalarms'), $paymentStatus),
@@ -1658,7 +1643,6 @@ class PortalService
             }
             
             if ($amount <= 0) {
-                delete_transient($lockKey);
                 return new WP_Error('bad_request', __('Payment amount must be greater than zero', 'cheapalarms'), ['status' => 400]);
             }
             
@@ -1671,14 +1655,91 @@ class PortalService
             
             // Smart decision: Only block if invoice is actually fully paid AND it's a duplicate transaction
             $isDuplicateTransaction = ($existingPaymentRecord !== null);
+            $isDuplicateConfirmed = $this->isPaymentRecordConfirmed($existingPaymentRecord);
             $isActuallyFullyPaid = ($invoiceTotal > 0) && (($existingPaidAmount + $tolerance) >= $invoiceTotal);
             
+            // Use stored invoice meta from $meta (source of truth for this estimate)
+            $storedInvoiceMeta = $meta['invoice'] ?? [];
+            $invoiceStatus = is_array($storedInvoiceMeta) ? ($storedInvoiceMeta['status'] ?? 'draft') : 'draft';
+            
+            // Needs finalize if invoice is still draft but money exists
+            $invoiceNeedsFinalize = (strtolower($invoiceStatus) === 'draft') && ($existingPaidAmount > 0);
+            
+            // Xero invoice id should also come from stored invoice meta
+            $xeroInvoiceId = is_array($storedInvoiceMeta) ? ($storedInvoiceMeta['xeroInvoiceId'] ?? null) : null;
+            
+            $hasXeroPaymentId = ($existingPaymentRecord && !empty($existingPaymentRecord['xeroPaymentId']));
+            $hasXeroSyncedFlag = ($existingPaymentRecord && !empty($existingPaymentRecord['xeroSynced']) && $existingPaymentRecord['xeroSynced'] === true);
+            
+            $xeroNeedsSync = (!empty($xeroInvoiceId) && !$hasXeroPaymentId && !$hasXeroSyncedFlag);
+            
+            // Debug logging for idempotency decision
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $existingRecordStatus = ($existingPaymentRecord !== null) ? ($existingPaymentRecord['status'] ?? 'none') : 'none';
+                $this->logger->info('[DEBUG] Idempotency check', [
+                    'estimateId' => $estimateId,
+                    'provider' => $provider,
+                    'transactionId' => $transactionId,
+                    'isDuplicateTransaction' => $isDuplicateTransaction,
+                    'isDuplicateConfirmed' => $isDuplicateConfirmed,
+                    'existingRecordStatus' => $existingRecordStatus,
+                    'isActuallyFullyPaid' => $isActuallyFullyPaid,
+                    'invoiceStatus' => $invoiceStatus,
+                    'invoiceNeedsFinalize' => $invoiceNeedsFinalize,
+                    'xeroInvoiceId' => $xeroInvoiceId,
+                    'xeroNeedsSync' => $xeroNeedsSync,
+                    'hasXeroPaymentId' => $hasXeroPaymentId,
+                    'hasXeroSyncedFlag' => $hasXeroSyncedFlag,
+                    'existingPaidAmount' => $existingPaidAmount,
+                    'invoiceTotal' => $invoiceTotal,
+                ]);
+            }
+            
             // If invoice is fully paid:
-            // - allow idempotent re-confirm of the same transaction (return ok+alreadyPaid)
+            // - allow idempotent re-confirm of the same transaction if it's confirmed (return ok+alreadyPaid)
+            // - allow unconfirmed duplicate to complete (edge case: invoice shows fully paid but duplicate needs confirmation)
             // - block any NEW transaction from charging more (return error)
             if ($isActuallyFullyPaid) {
-                if ($isDuplicateTransaction) {
-                    delete_transient($lockKey);
+                if ($isDuplicateTransaction && $isDuplicateConfirmed) {
+                    // Duplicate confirmed transaction on fully paid invoice
+                    // Early return only if invoice finalized AND Xero synced (if applicable)
+                    // This allows invoice finalization and Xero sync to complete even for duplicate transactions
+                    if (!$invoiceNeedsFinalize && (empty($xeroInvoiceId) || !$xeroNeedsSync)) {
+                        // Everything is complete - safe to return early
+                        return [
+                            'ok' => true,
+                            'payment' => $meta['payment'] ?? null,
+                            'alreadyPaid' => true,
+                            'duplicateTransaction' => true,
+                        ];
+                    }
+                    // Invoice needs finalization or Xero sync - continue processing
+                }
+                
+                if ($isDuplicateTransaction && !$isDuplicateConfirmed) {
+                    // Duplicate exists but not confirmed - allow it to complete confirmation
+                    // This is an edge case but ensures unconfirmed duplicates can finish processing
+                    // Continue to processing below
+                } else {
+                    // New transactionId but invoice is already fully paid -> reject to prevent overpayment
+                    return new WP_Error(
+                        'invoice_already_paid',
+                        __('Invoice is already fully paid. No further payment is required.', 'cheapalarms'),
+                        ['status' => 400, 'alreadyPaid' => true]
+                    );
+                }
+            }
+            
+            // If NOT fully paid:
+            // - if duplicate transaction AND duplicate is confirmed -> return idempotent ok (don't charge twice)
+            // - if duplicate transaction BUT duplicate is NOT confirmed -> continue processing to complete confirmation
+            // - else continue and process as normal
+            if ($isDuplicateTransaction && $isDuplicateConfirmed) {
+                // Duplicate confirmed transaction on partially paid invoice
+                // Early return only if invoice finalized AND Xero synced (if applicable)
+                // This allows invoice finalization and Xero sync to complete even for duplicate transactions
+                if (!$invoiceNeedsFinalize && (empty($xeroInvoiceId) || !$xeroNeedsSync)) {
+                    // Everything is complete - safe to return early
                     return [
                         'ok' => true,
                         'payment' => $meta['payment'] ?? null,
@@ -1686,28 +1747,11 @@ class PortalService
                         'duplicateTransaction' => true,
                     ];
                 }
-                
-                // New transactionId but invoice is already fully paid -> reject to prevent overpayment
-                delete_transient($lockKey);
-                return new WP_Error(
-                    'invoice_already_paid',
-                    __('Invoice is already fully paid. No further payment is required.', 'cheapalarms'),
-                    ['status' => 400, 'alreadyPaid' => true]
-                );
+                // Invoice needs finalization or Xero sync - continue processing
             }
             
-            // If NOT fully paid:
-            // - if duplicate transaction, return idempotent ok (don't charge twice)
-            // - else continue and process as normal
-            if ($isDuplicateTransaction) {
-                delete_transient($lockKey);
-                return [
-                    'ok' => true,
-                    'payment' => $meta['payment'] ?? null,
-                    'alreadyPaid' => true,
-                    'duplicateTransaction' => true,
-                ];
-            }
+            // If duplicate exists but NOT confirmed, continue processing to complete the confirmation
+            // This allows retries of failed/incomplete payment confirmations to complete
             
             // CRITICAL FIX: Calculate temporary totalPaidAmount for validation
             // We'll recalculate from the payments array after updating it to ensure accuracy
@@ -1727,8 +1771,6 @@ class PortalService
             // This prevents false positives when amounts are equal within rounding error
             // Tolerance is defined earlier in the method
             if ($tempTotalPaidAmount > ($invoiceTotal + $tolerance)) {
-                delete_transient($lockKey);
-                
                 // If Stripe already charged, attempt a refund to avoid over-collection
                 if ($provider === 'stripe' && !empty($transactionId)) {
                     try {
@@ -1841,7 +1883,7 @@ class PortalService
             // This fixes the bug where invoice shows "Partially Paid" when fully paid
             $totalPaidAmount = 0;
             foreach ($payments as $p) {
-                $isSuccessful = ($p['status'] ?? 'succeeded') === 'succeeded';
+                $isSuccessful = (($p['status'] ?? null) === 'succeeded');
                 $isRefunded = ($p['refunded'] ?? false) === true;
                 if ($isSuccessful && !$isRefunded && !empty($p['amount'])) {
                     $totalPaidAmount += (float) $p['amount'];
@@ -1935,9 +1977,6 @@ class PortalService
                 ]);
             }
             
-            // Release lock
-            delete_transient($lockKey);
-
             if (defined('WP_DEBUG') && WP_DEBUG) {
                 $this->logger->info('Payment confirmed successfully', [
                     'estimateId' => $estimateId,
@@ -2145,7 +2184,7 @@ class PortalService
                                 // remainingBalance, status, and amountDue are correct for the portal
                                 $recalculatedTotalPaid = 0;
                                 foreach ($refreshedPayments as $p) {
-                                    $isSuccessful = ($p['status'] ?? 'succeeded') === 'succeeded';
+                                    $isSuccessful = (($p['status'] ?? null) === 'succeeded');
                                     $isRefunded = ($p['refunded'] ?? false) === true;
                                     if ($isSuccessful && !$isRefunded && !empty($p['amount'])) {
                                         $recalculatedTotalPaid += (float) $p['amount'];
@@ -2297,8 +2336,6 @@ class PortalService
                 'debug' => $debugInfo, // DEBUG: Diagnostic information for troubleshooting
             ];
         } catch (\Exception $e) {
-            // Release lock on error
-            delete_transient($lockKey);
             $this->logger->error('Exception during payment confirmation', [
                 'estimateId' => $estimateId,
                 'error' => $e->getMessage(),
@@ -2309,6 +2346,9 @@ class PortalService
                 __('An error occurred while confirming payment. Please try again.', 'cheapalarms'),
                 ['status' => 500]
             );
+        } finally {
+            // Always release lock, even on errors or early returns
+            delete_transient($lockKey);
         }
     }
 
@@ -5822,7 +5862,7 @@ class PortalService
         if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
             $sum = 0.0;
             foreach ($meta['payment']['payments'] as $prevPayment) {
-                $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
+                $isSuccessful = (($prevPayment['status'] ?? null) === 'succeeded');
                 $isRefunded = ($prevPayment['refunded'] ?? false) === true;
                 if ($isSuccessful && !$isRefunded && isset($prevPayment['amount'])) {
                     $sum += (float) $prevPayment['amount'];
@@ -5839,6 +5879,37 @@ class PortalService
         }
         
         return 0.0;
+    }
+
+    /**
+     * Check if a payment record is confirmed (fully processed)
+     * 
+     * A payment is considered confirmed if:
+     * - Status is 'succeeded' (terminal success state)
+     * - AND not refunded
+     * 
+     * Optional indicators of completion (not required but helpful):
+     * - xeroPaymentId presence (indicates Xero sync completed)
+     * - paidAt timestamp (indicates payment was recorded)
+     * 
+     * @param array|null $paymentRecord Payment record from payments array
+     * @return bool True if payment is confirmed, false otherwise
+     */
+    private function isPaymentRecordConfirmed(?array $paymentRecord): bool
+    {
+        if ($paymentRecord === null) {
+            return false;
+        }
+        
+        // Primary check: status must be 'succeeded' (terminal success state)
+        $status = $paymentRecord['status'] ?? null;
+        $isSucceeded = ($status === 'succeeded');
+        
+        // Must not be refunded
+        $isRefunded = ($paymentRecord['refunded'] ?? false) === true;
+        
+        // Payment is confirmed if it succeeded and wasn't refunded
+        return $isSucceeded && !$isRefunded;
     }
 
     /**
