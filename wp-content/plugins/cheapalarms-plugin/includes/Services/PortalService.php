@@ -1457,17 +1457,6 @@ class PortalService
             $locationId = $locationId ?: $this->config->getLocationId();
             $meta = $this->getMeta($estimateId);
             
-            // SECURITY: Check if payment is already confirmed (duplicate payment protection)
-            $existingPayment = $meta['payment'] ?? null;
-            if (!empty($existingPayment['status']) && $existingPayment['status'] === 'paid') {
-                delete_transient($lockKey);
-                return [
-                    'ok' => true,
-                    'payment' => $existingPayment,
-                    'alreadyPaid' => true,
-                ];
-            }
-            
             // Validate estimate is accepted (payment allowed after acceptance, booking is optional)
             $workflowStatus = $meta['workflow']['status'] ?? 'requested';
             $quoteStatus = $meta['quote']['status'] ?? 'sent';
@@ -1508,6 +1497,10 @@ class PortalService
             $provider = sanitize_text_field($paymentData['provider'] ?? 'mock');
             $transactionId = sanitize_text_field($paymentData['transactionId'] ?? null);
             
+            // Initialize duplicate detection variables
+            $existingPaymentRecord = null;
+            $existingPaymentIndex = null;
+            
             if ($provider === 'stripe' && !empty($transactionId)) {
                 $expiresAt = $meta['payment']['paymentIntentExpiresAt'] ?? null;
                 if (!empty($expiresAt) && time() > (int) $expiresAt) {
@@ -1530,6 +1523,17 @@ class PortalService
                 $existingPaymentIndex = null;
                 $existingPaymentRecord = null;
                 
+                // WP_DEBUG: Log before duplicate detection
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    $this->logger->info('[DEBUG] Before duplicate detection', [
+                        'estimateId' => $estimateId,
+                        'transactionId' => $transactionId,
+                        'provider' => $provider,
+                        'paymentIntentId' => $transactionId, // For Stripe, transactionId IS paymentIntentId
+                        'paymentsCount' => is_array($existingPayments) ? count($existingPayments) : 0,
+                    ]);
+                }
+                
                 if (is_array($existingPayments)) {
                     foreach ($existingPayments as $index => $prevPayment) {
                         // Check by transactionId (for PortalService records)
@@ -1544,6 +1548,17 @@ class PortalService
                             break;
                         }
                     }
+                }
+                
+                // WP_DEBUG: Log after match
+                if (defined('WP_DEBUG') && WP_DEBUG && $existingPaymentRecord) {
+                    $this->logger->info('[DEBUG] Duplicate payment record found', [
+                        'estimateId' => $estimateId,
+                        'matchedIndex' => $existingPaymentIndex,
+                        'matchedRecordKeys' => array_keys($existingPaymentRecord),
+                        'hasXeroPaymentId' => !empty($existingPaymentRecord['xeroPaymentId']),
+                        'hasXeroSynced' => isset($existingPaymentRecord['xeroSynced']),
+                    ]);
                 }
                 
                 // If payment record already exists, we'll update it instead of creating a duplicate
@@ -1622,6 +1637,26 @@ class PortalService
                 $amount = isset($paymentData['amount']) ? (float) $paymentData['amount'] : $invoiceTotal;
             }
             
+            // For non-Stripe payments, check for duplicate transactionId
+            if ($provider !== 'stripe' && !empty($transactionId) && $existingPaymentRecord === null) {
+                $existingPayments = $meta['payment']['payments'] ?? [];
+                if (is_array($existingPayments)) {
+                    foreach ($existingPayments as $i => $prevPayment) {
+                        $prevTid = $prevPayment['transactionId'] ?? null;
+                        $prevProvider = $prevPayment['provider'] ?? null;
+                        
+                        if ($prevTid && hash_equals((string)$prevTid, (string)$transactionId)) {
+                            // If provider is stored, require it to match
+                            if ($prevProvider === null || $prevProvider === $provider) {
+                                $existingPaymentRecord = $prevPayment;
+                                $existingPaymentIndex = $i;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
             if ($amount <= 0) {
                 delete_transient($lockKey);
                 return new WP_Error('bad_request', __('Payment amount must be greater than zero', 'cheapalarms'), ['status' => 400]);
@@ -1631,25 +1666,67 @@ class PortalService
             // FIXED: Use consistent logic with StripeController (exclude refunded payments)
             $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
             
-            // CRITICAL FIX: If payment record already exists (from StripeController), don't add amount again
-            // The amount is already included in $existingPaidAmount, so adding it again would double-count
+            // Define tolerance for floating point comparisons
+            $tolerance = 0.01;
+            
+            // Smart decision: Only block if invoice is actually fully paid AND it's a duplicate transaction
+            $isDuplicateTransaction = ($existingPaymentRecord !== null);
+            $isActuallyFullyPaid = ($invoiceTotal > 0) && (($existingPaidAmount + $tolerance) >= $invoiceTotal);
+            
+            // If invoice is fully paid:
+            // - allow idempotent re-confirm of the same transaction (return ok+alreadyPaid)
+            // - block any NEW transaction from charging more (return error)
+            if ($isActuallyFullyPaid) {
+                if ($isDuplicateTransaction) {
+                    delete_transient($lockKey);
+                    return [
+                        'ok' => true,
+                        'payment' => $meta['payment'] ?? null,
+                        'alreadyPaid' => true,
+                        'duplicateTransaction' => true,
+                    ];
+                }
+                
+                // New transactionId but invoice is already fully paid -> reject to prevent overpayment
+                delete_transient($lockKey);
+                return new WP_Error(
+                    'invoice_already_paid',
+                    __('Invoice is already fully paid. No further payment is required.', 'cheapalarms'),
+                    ['status' => 400, 'alreadyPaid' => true]
+                );
+            }
+            
+            // If NOT fully paid:
+            // - if duplicate transaction, return idempotent ok (don't charge twice)
+            // - else continue and process as normal
+            if ($isDuplicateTransaction) {
+                delete_transient($lockKey);
+                return [
+                    'ok' => true,
+                    'payment' => $meta['payment'] ?? null,
+                    'alreadyPaid' => true,
+                    'duplicateTransaction' => true,
+                ];
+            }
+            
+            // CRITICAL FIX: Calculate temporary totalPaidAmount for validation
+            // We'll recalculate from the payments array after updating it to ensure accuracy
             if ($existingPaymentRecord) {
-                // Use existing amount from the record (already in $existingPaidAmount)
-                $amount = (float) ($existingPaymentRecord['amount'] ?? $amount);
-                // Don't add amount again - it's already in $existingPaidAmount
-                $totalPaidAmount = $existingPaidAmount;
+                // When updating existing record, account for amount change
+                // existingPaidAmount includes the old amount, so subtract it and add new amount
+                $oldAmount = (float) ($existingPaymentRecord['amount'] ?? 0);
+                $tempTotalPaidAmount = $existingPaidAmount - $oldAmount + $amount;
             } else {
                 // No existing record - add amount normally
-                $totalPaidAmount = $existingPaidAmount + $amount;
+                $tempTotalPaidAmount = $existingPaidAmount + $amount;
             }
             
             // SECURITY: Validate cumulative payment amount against invoice total
             // Allow partial payments (up to invoice total), but prevent overpayment
             // Use tolerance for floating point precision (0.01 = 1 cent)
             // This prevents false positives when amounts are equal within rounding error
-            // Matches the tolerance pattern used for isFullyPaid check (line 1674)
-            $tolerance = 0.01;
-            if ($totalPaidAmount > ($invoiceTotal + $tolerance)) {
+            // Tolerance is defined earlier in the method
+            if ($tempTotalPaidAmount > ($invoiceTotal + $tolerance)) {
                 delete_transient($lockKey);
                 
                 // If Stripe already charged, attempt a refund to avoid over-collection
@@ -1687,7 +1764,7 @@ class PortalService
                     'payment_exceeds_invoice',
                     sprintf(
                         __('Total payment amount (%.2f) exceeds invoice total (%.2f). Remaining balance: %.2f', 'cheapalarms'),
-                        $totalPaidAmount,
+                        $tempTotalPaidAmount,
                         $invoiceTotal,
                         max(0, $invoiceTotal - $existingPaidAmount)
                     ),
@@ -1696,7 +1773,7 @@ class PortalService
                         'invoiceTotal' => $invoiceTotal,
                         'existingPaidAmount' => $existingPaidAmount,
                         'amountProvided' => $amount,
-                        'totalPaidAmount' => $totalPaidAmount,
+                        'totalPaidAmount' => $tempTotalPaidAmount,
                         'remainingBalance' => max(0, $invoiceTotal - $existingPaidAmount),
                     ]
                 );
@@ -1719,6 +1796,7 @@ class PortalService
                 ]);
                 
                 // Update existing record with any missing fields
+                // CRITICAL FIX: Also update amount if it's different (e.g., if Stripe amount differs from stored)
                 if (!isset($existingPaymentRecord['transactionId']) && !empty($transactionId)) {
                     $existingPaymentRecord['transactionId'] = sanitize_text_field($transactionId);
                 }
@@ -1731,6 +1809,9 @@ class PortalService
                 if (!isset($existingPaymentRecord['paidAt'])) {
                     $existingPaymentRecord['paidAt'] = current_time('mysql');
                 }
+                // Update amount to ensure it matches the actual payment amount from Stripe
+                $existingPaymentRecord['amount'] = $amount;
+                $existingPaymentRecord['status'] = 'succeeded'; // Ensure status is set
                 
                 // Update the payment record in the array
                 $payments[$existingPaymentIndex] = $existingPaymentRecord;
@@ -1755,8 +1836,20 @@ class PortalService
                 $payments[] = $paymentRecord;
             }
             
-            // Determine if invoice is fully paid
-            $isFullyPaid = abs($totalPaidAmount - $invoiceTotal) < 0.01; // Tolerance for floating point
+            // CRITICAL FIX: Recalculate totalPaidAmount from updated payments array
+            // This ensures accuracy whether we updated an existing record or created a new one
+            // This fixes the bug where invoice shows "Partially Paid" when fully paid
+            $totalPaidAmount = 0;
+            foreach ($payments as $p) {
+                $isSuccessful = ($p['status'] ?? 'succeeded') === 'succeeded';
+                $isRefunded = ($p['refunded'] ?? false) === true;
+                if ($isSuccessful && !$isRefunded && !empty($p['amount'])) {
+                    $totalPaidAmount += (float) $p['amount'];
+                }
+            }
+            
+            // Determine if invoice is fully paid using RECALCULATED total
+            $isFullyPaid = abs($totalPaidAmount - $invoiceTotal) < $tolerance; // Tolerance for floating point
             
             // Update payment data structure
             // FIX B: Always set remainingBalance (contract guarantee)
@@ -1804,10 +1897,21 @@ class PortalService
 
             // Update invoice meta with payment data
             // Calculate amountDue and status based on payment records
-            $invoiceMeta = $meta['invoice'] ?? [];
+            // CRITICAL FIX: Ensure xeroInvoiceId is preserved from earlier save
+            // If xeroInvoiceId was saved earlier (line 1878), it should already be in $invoiceMeta
+            // But refresh from meta to be safe (in case it was saved after we read $invoiceMeta)
+            $refreshedMeta = $this->getMeta($estimateId);
+            $invoiceMeta = $refreshedMeta['invoice'] ?? [];
+            
+            // Update calculated fields
             $invoiceMeta['amountDue'] = max(0, $invoiceTotal - $totalPaidAmount);
             // Set status: 'paid' if fully paid, 'partial' if partially paid, otherwise keep existing status
             $invoiceMeta['status'] = $isFullyPaid ? 'paid' : ($totalPaidAmount > 0 ? 'partial' : ($invoiceMeta['status'] ?? 'draft'));
+            
+            // Preserve xeroInvoiceId if it exists (critical for second payment)
+            if (!empty($xeroInvoiceId) && empty($invoiceMeta['xeroInvoiceId'])) {
+                $invoiceMeta['xeroInvoiceId'] = $xeroInvoiceId;
+            }
             
             // Update meta
             $this->updateMeta($estimateId, [
@@ -1815,6 +1919,21 @@ class PortalService
                 'workflow' => $workflow,
                 'invoice' => $invoiceMeta,
             ]);
+            
+            // WP_DEBUG: Log after final meta write
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                $this->logger->info('[DEBUG] After final meta write', [
+                    'estimateId' => $estimateId,
+                    'invoice.status' => $invoiceMeta['status'] ?? null,
+                    'invoice.amountDue' => $invoiceMeta['amountDue'] ?? null,
+                    'invoice.xeroInvoiceId' => $invoiceMeta['xeroInvoiceId'] ?? null,
+                    'payment.amount' => $payment['amount'] ?? null,
+                    'payment.remainingBalance' => $payment['remainingBalance'] ?? null,
+                    'payment.status' => $payment['status'] ?? null,
+                    'totalPaidAmount' => $totalPaidAmount,
+                    'isFullyPaid' => $isFullyPaid,
+                ]);
+            }
             
             // Release lock
             delete_transient($lockKey);
@@ -1833,6 +1952,10 @@ class PortalService
             // The invoice was retrieved above and belongs to this estimateId, so xeroInvoiceId is safe
             $xeroInvoiceId = $invoice['xeroInvoiceId'] ?? null;
             $xeroService = $this->container->get(\CheapAlarms\Plugin\Services\XeroService::class);
+            
+            // Initialize for debug output
+            $xeroPaymentResult = null;
+            $xeroSyncAttempted = false;
             
             // Only attempt Xero sync if Xero is connected
             if ($xeroService->isConnected()) {
@@ -1856,6 +1979,15 @@ class PortalService
                             
                             // Update meta to store Xero invoice ID
                             $this->updateMeta($estimateId, ['invoice' => $invoiceMeta]);
+                            
+                            // CRITICAL FIX: Refresh invoiceMeta from updated meta to ensure xeroInvoiceId is preserved
+                            // This prevents the race condition where xeroInvoiceId is saved but then overwritten
+                            $refreshedMeta = $this->getMeta($estimateId);
+                            $invoiceMeta = $refreshedMeta['invoice'] ?? [];
+                            // Ensure xeroInvoiceId is set (defensive)
+                            if (empty($invoiceMeta['xeroInvoiceId']) && !empty($xeroInvoiceId)) {
+                                $invoiceMeta['xeroInvoiceId'] = $xeroInvoiceId;
+                            }
                             
                             $this->logger->info('Found invoice in Xero, updating meta', [
                                 'estimateId' => $estimateId,
@@ -1898,33 +2030,184 @@ class PortalService
                 // Sync payment to Xero if we have xeroInvoiceId
                 if ($xeroInvoiceId) {
                     $paymentMethod = $payment['provider'] === 'stripe' ? 'Stripe' : ($payment['provider'] ?? 'Manual');
-                    $transactionId = $payment['transactionId'] ?? '';
+                    // Note: $transactionId is already defined at line 1509 and is still in scope here
                     
-                    // SECURITY: xeroInvoiceId is validated - it comes from invoice meta that belongs to this estimate
-                    // No additional validation needed as the invoice was already retrieved from this estimate's meta
-                    $xeroPaymentResult = $xeroService->recordPayment(
-                        $xeroInvoiceId,
-                        $amount,
-                        $paymentMethod,
-                        $transactionId
-                    );
+                    // CRITICAL FIX: Sync NEW payments OR existing payments that haven't been synced yet
+                    // When StripeController creates a payment record, it doesn't sync to Xero
+                    // PortalService needs to sync it, even if the record already exists
+                    // Check if payment has already been synced - PREFER xeroPaymentId over boolean flag
+                    $shouldSyncToXero = false;
                     
-                    if (is_wp_error($xeroPaymentResult)) {
-                        // Log error but don't fail the payment confirmation
-                        $this->logger->error('Failed to record payment in Xero', [
-                            'estimateId' => $estimateId,
-                            'xeroInvoiceId' => $xeroInvoiceId,
-                            'amount' => $amount,
-                            'error' => $xeroPaymentResult->get_error_message(),
-                        ]);
+                    if (!$existingPaymentRecord) {
+                        // This is a completely NEW payment - sync to Xero
+                        $shouldSyncToXero = true;
                     } else {
+                        // Existing payment record found - check if it's already been synced to Xero
+                        // PREFER xeroPaymentId presence (more reliable than boolean flag)
+                        $hasXeroPaymentId = !empty($existingPaymentRecord['xeroPaymentId']);
+                        $hasXeroSyncedFlag = !empty($existingPaymentRecord['xeroSynced']) && $existingPaymentRecord['xeroSynced'] === true;
+                        $hasBeenSyncedToXero = $hasXeroPaymentId || $hasXeroSyncedFlag;
+                        
+                        if (!$hasBeenSyncedToXero) {
+                            // Payment record exists but hasn't been synced to Xero yet (e.g., created by StripeController)
+                            // Sync it now
+                            $shouldSyncToXero = true;
+                        } else {
+                            // Payment record already exists AND has been synced to Xero
+                            // Skip Xero sync to avoid duplicate payments
+                            $this->logger->info('Skipping Xero sync - payment already synced', [
+                                'estimateId' => $estimateId,
+                                'transactionId' => $transactionId,
+                                'xeroPaymentId' => $existingPaymentRecord['xeroPaymentId'] ?? null,
+                                'oldAmount' => $existingPaymentRecord['amount'] ?? null,
+                                'newAmount' => $amount,
+                            ]);
+                        }
+                        
+                        // WP_DEBUG: Log after Xero decision (shows actual decision)
                         if (defined('WP_DEBUG') && WP_DEBUG) {
-                            $this->logger->info('Payment recorded in Xero', [
+                            $this->logger->info('[DEBUG] Xero sync decision', [
                                 'estimateId' => $estimateId,
                                 'xeroInvoiceId' => $xeroInvoiceId,
-                                'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
-                                'amount' => $amount,
+                                'shouldSyncToXero' => $shouldSyncToXero,
+                                'hasBeenSyncedToXero' => $hasBeenSyncedToXero,
+                                'syncReason' => $hasXeroPaymentId ? 'has_xero_payment_id' : ($hasXeroSyncedFlag ? 'has_xero_synced_flag' : 'not_synced'),
+                                'xeroPaymentId' => $existingPaymentRecord['xeroPaymentId'] ?? null,
+                                'xeroSynced' => $existingPaymentRecord['xeroSynced'] ?? null,
                             ]);
+                        }
+                    }
+                    
+                    if ($shouldSyncToXero) {
+                        // Sync payment to Xero
+                        $xeroSyncAttempted = true;
+                        $xeroPaymentResult = $xeroService->recordPayment(
+                            $xeroInvoiceId,
+                            $amount,
+                            $paymentMethod,
+                            $transactionId
+                        );
+                        
+                        if (is_wp_error($xeroPaymentResult)) {
+                            // Log error but don't fail the payment confirmation
+                            $this->logger->error('Failed to record payment in Xero', [
+                                'estimateId' => $estimateId,
+                                'xeroInvoiceId' => $xeroInvoiceId,
+                                'amount' => $amount,
+                                'error' => $xeroPaymentResult->get_error_message(),
+                                'error_data' => $xeroPaymentResult->get_error_data(),
+                            ]);
+                            
+                            // WP_DEBUG: Log Xero sync failure
+                            if (defined('WP_DEBUG') && WP_DEBUG) {
+                                $this->logger->error('[DEBUG] Xero sync failed', [
+                                    'estimateId' => $estimateId,
+                                    'xeroInvoiceId' => $xeroInvoiceId,
+                                    'amount' => $amount,
+                                    'error' => $xeroPaymentResult->get_error_message(),
+                                ]);
+                            }
+                        } else {
+                            // WP_DEBUG: Log Xero sync success
+                            if (defined('WP_DEBUG') && WP_DEBUG) {
+                                $this->logger->info('[DEBUG] Xero sync succeeded', [
+                                    'estimateId' => $estimateId,
+                                    'xeroInvoiceId' => $xeroInvoiceId,
+                                    'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
+                                    'amount' => $amount,
+                                ]);
+                            }
+                            // Mark payment as synced to Xero
+                            // CRITICAL FIX: Refresh meta after first save to get latest state
+                            // Then find payment by transactionId/paymentIntentId (not by index which may be stale)
+                            $refreshedMeta = $this->getMeta($estimateId);
+                            $refreshedPayments = $refreshedMeta['payment']['payments'] ?? [];
+                            
+                            // Find the payment record by transactionId or paymentIntentId
+                            $paymentIndexToUpdate = null;
+                            foreach ($refreshedPayments as $index => $paymentRecord) {
+                                $matchesTransactionId = !empty($paymentRecord['transactionId']) && $paymentRecord['transactionId'] === $transactionId;
+                                $matchesPaymentIntentId = !empty($paymentRecord['paymentIntentId']) && $paymentRecord['paymentIntentId'] === $transactionId;
+                                
+                                if ($matchesTransactionId || $matchesPaymentIntentId) {
+                                    $paymentIndexToUpdate = $index;
+                                    break;
+                                }
+                            }
+                            
+                            if ($paymentIndexToUpdate !== null) {
+                                // Update the payment record with Xero sync info
+                                $refreshedPayments[$paymentIndexToUpdate]['xeroPaymentId'] = $xeroPaymentResult['paymentId'] ?? null;
+                                $refreshedPayments[$paymentIndexToUpdate]['xeroSynced'] = true;
+                                
+                                // CRITICAL FIX: Recalculate totals and status after Xero sync update
+                                // The payments array was updated, so we must recalculate totals to ensure
+                                // remainingBalance, status, and amountDue are correct for the portal
+                                $recalculatedTotalPaid = 0;
+                                foreach ($refreshedPayments as $p) {
+                                    $isSuccessful = ($p['status'] ?? 'succeeded') === 'succeeded';
+                                    $isRefunded = ($p['refunded'] ?? false) === true;
+                                    if ($isSuccessful && !$isRefunded && !empty($p['amount'])) {
+                                        $recalculatedTotalPaid += (float) $p['amount'];
+                                    }
+                                }
+                                
+                                $recalculatedIsFullyPaid = abs($recalculatedTotalPaid - $invoiceTotal) < 0.01;
+                                $recalculatedRemainingBalance = max(0, $invoiceTotal - $recalculatedTotalPaid);
+                                
+                                // Get current meta to update payment and invoice fields
+                                $currentMeta = $this->getMeta($estimateId);
+                                $currentPayment = $currentMeta['payment'] ?? [];
+                                $currentInvoiceMeta = $currentMeta['invoice'] ?? [];
+                                $currentWorkflow = $currentMeta['workflow'] ?? [];
+                                
+                                // Update payment object with recalculated totals
+                                $currentPayment['amount'] = $recalculatedTotalPaid;
+                                $currentPayment['remainingBalance'] = $recalculatedRemainingBalance;
+                                $currentPayment['status'] = $recalculatedIsFullyPaid ? 'paid' : 'partial';
+                                $currentPayment['payments'] = $refreshedPayments;
+                                
+                                // Update invoice meta with recalculated totals
+                                $currentInvoiceMeta['amountDue'] = $recalculatedRemainingBalance;
+                                $currentInvoiceMeta['status'] = $recalculatedIsFullyPaid ? 'paid' : ($recalculatedTotalPaid > 0 ? 'partial' : ($currentInvoiceMeta['status'] ?? 'draft'));
+                                
+                                // Update workflow status if fully paid
+                                if ($recalculatedIsFullyPaid) {
+                                    $currentWorkflow['status'] = 'paid';
+                                    $currentWorkflow['currentStep'] = 5;
+                                    if (empty($currentWorkflow['paidAt'])) {
+                                        $currentWorkflow['paidAt'] = current_time('mysql');
+                                    }
+                                }
+                                
+                                // Update meta with all recalculated fields
+                                $this->updateMeta($estimateId, [
+                                    'payment' => $currentPayment,
+                                    'invoice' => $currentInvoiceMeta,
+                                    'workflow' => $currentWorkflow,
+                                ]);
+                                
+                                $this->logger->info('Payment recorded in Xero and totals recalculated', [
+                                    'estimateId' => $estimateId,
+                                    'xeroInvoiceId' => $xeroInvoiceId,
+                                    'xeroPaymentId' => $xeroPaymentResult['paymentId'] ?? null,
+                                    'amount' => $amount,
+                                    'transactionId' => $transactionId,
+                                    'paymentIndex' => $paymentIndexToUpdate,
+                                    'wasExistingRecord' => $existingPaymentRecord !== null,
+                                    'recalculatedTotalPaid' => $recalculatedTotalPaid,
+                                    'recalculatedRemainingBalance' => $recalculatedRemainingBalance,
+                                    'recalculatedIsFullyPaid' => $recalculatedIsFullyPaid,
+                                ]);
+                            } else {
+                                // Payment record not found - this should not happen but log for debugging
+                                $this->logger->warning('Payment record not found when updating Xero sync info', [
+                                    'estimateId' => $estimateId,
+                                    'transactionId' => $transactionId,
+                                    'paymentsCount' => count($refreshedPayments),
+                                    'wasExistingRecord' => $existingPaymentRecord !== null,
+                                ]);
+                            }
                         }
                     }
                 } else {
@@ -1958,7 +2241,9 @@ class PortalService
                 // Recalculate with updated payment data
                 $existingPaidAmount = $this->calculateExistingPaidAmount($meta);
                 $minimumPayment = $this->calculateMinimumPaymentForInvoice($invoiceTotal, $existingPaidAmount, $invoice);
-                $remainingBalance = max(0, $invoiceTotal - $totalPaidAmount);
+                // FIX 2: Use recalculated $existingPaidAmount instead of $totalPaidAmount for remaining balance
+                // $totalPaidAmount is from the payment confirmation context, but we need the fresh calculation from meta
+                $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
                 $isFirstPayment = ($existingPaidAmount == 0);
                 $isSubsequentPayment = !$isFirstPayment;
                 
@@ -1973,13 +2258,43 @@ class PortalService
                 ];
             }
 
+            // FIX 2: Use recalculated remainingBalance from minimumPaymentInfo if available, otherwise use $totalPaidAmount
+            // This ensures consistency with the fresh calculation from meta
+            $finalRemainingBalance = $minimumPaymentInfo['remainingBalance'] ?? max(0, $invoiceTotal - $totalPaidAmount);
+            
+            // Prepare debug information for troubleshooting payment issues
+            $debugInfo = [
+                'wasExistingRecord' => $existingPaymentRecord !== null,
+                'existingRecordAmount' => $existingPaymentRecord ? ($existingPaymentRecord['amount'] ?? null) : null,
+                'existingRecordTransactionId' => $existingPaymentRecord ? ($existingPaymentRecord['transactionId'] ?? null) : null,
+                'existingRecordPaymentIntentId' => $existingPaymentRecord ? ($existingPaymentRecord['paymentIntentId'] ?? null) : null,
+                'newAmount' => $amount,
+                'totalPaidAmount' => $totalPaidAmount,
+                'invoiceTotal' => $invoiceTotal,
+                'paymentCount' => count($payments),
+                'allPayments' => array_map(function($p) {
+                    return [
+                        'amount' => $p['amount'] ?? null,
+                        'transactionId' => $p['transactionId'] ?? null,
+                        'paymentIntentId' => $p['paymentIntentId'] ?? null,
+                        'status' => $p['status'] ?? null,
+                        'provider' => $p['provider'] ?? null,
+                    ];
+                }, $payments),
+                'xeroSyncAttempted' => $xeroSyncAttempted,
+                'xeroSyncSucceeded' => $xeroPaymentResult !== null && !is_wp_error($xeroPaymentResult),
+                'xeroSyncError' => $xeroPaymentResult !== null && is_wp_error($xeroPaymentResult) ? $xeroPaymentResult->get_error_message() : null,
+                'xeroInvoiceId' => $xeroInvoiceId ?? null,
+            ];
+            
             return [
                 'ok' => true,
                 'payment' => $payment,
                 'workflow' => $workflow,
                 'isFullyPaid' => $isFullyPaid,
-                'remainingBalance' => max(0, $invoiceTotal - $totalPaidAmount),
+                'remainingBalance' => $finalRemainingBalance,
                 'minimumPaymentInfo' => $minimumPaymentInfo, // Include for immediate UI update
+                'debug' => $debugInfo, // DEBUG: Diagnostic information for troubleshooting
             ];
         } catch (\Exception $e) {
             // Release lock on error
@@ -2457,7 +2772,7 @@ class PortalService
         return $decoded;
     }
 
-    private function updateMeta(string $estimateId, array $changes): bool
+    public function updateMeta(string $estimateId, array $changes): bool
     {
         // Use a lock to prevent race conditions during meta updates
         $lockKey = 'ca_meta_update_lock_' . $estimateId;
@@ -5503,26 +5818,27 @@ class PortalService
      */
     private function calculateExistingPaidAmount(array $meta): float
     {
-        $existingPaidAmount = 0;
-        $existingPayment = $meta['payment'] ?? null;
-        
-        // If already fully paid (legacy structure), use existing amount
-        if (!empty($existingPayment['amount']) && ($existingPayment['status'] ?? '') === 'paid') {
-            return (float) $existingPayment['amount'];
-        }
-        
-        // Sum all successful, non-refunded payments from payments array
+        // Prefer the payments array if present (most accurate)
         if (!empty($meta['payment']['payments']) && is_array($meta['payment']['payments'])) {
+            $sum = 0.0;
             foreach ($meta['payment']['payments'] as $prevPayment) {
                 $isSuccessful = ($prevPayment['status'] ?? 'succeeded') === 'succeeded';
                 $isRefunded = ($prevPayment['refunded'] ?? false) === true;
-                if ($isSuccessful && !$isRefunded && !empty($prevPayment['amount'])) {
-                    $existingPaidAmount += (float) $prevPayment['amount'];
+                if ($isSuccessful && !$isRefunded && isset($prevPayment['amount'])) {
+                    $sum += (float) $prevPayment['amount'];
                 }
             }
+            return $sum;
         }
         
-        return $existingPaidAmount;
+        // Legacy fallback only when no payments[] exists
+        $existingPayment = $meta['payment'] ?? null;
+        if (!empty($existingPayment['amount'])) {
+            // Even if status says paid/partial, treat amount as paid-to-date in legacy mode
+            return (float) $existingPayment['amount'];
+        }
+        
+        return 0.0;
     }
 
     /**

@@ -1128,21 +1128,20 @@ class XeroService
 
         // Determine invoice status
         // Xero valid statuses: DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED
-        // Default to AUTHORISED for posted invoices, but allow DRAFT if specified
+        // Always use AUTHORISED for customer-facing invoices (awaiting payment)
+        // GHL draft status doesn't matter - Xero invoices should be AUTHORISED for payment
         $invoiceStatus = 'AUTHORISED';
         if (isset($ghlInvoice['status'])) {
             $ghlStatus = strtoupper($ghlInvoice['status']);
-            // Map GHL status to Xero status
-            if ($ghlStatus === 'DRAFT') {
-                $invoiceStatus = 'DRAFT';
-            } elseif (in_array($ghlStatus, ['SUBMITTED', 'PENDING'])) {
-                $invoiceStatus = 'SUBMITTED';
-            } elseif (in_array($ghlStatus, ['PAID', 'COMPLETED'])) {
+            // Only check for PAID or VOIDED statuses from GHL
+            // All other statuses (including DRAFT, SUBMITTED, PENDING) default to AUTHORISED
+            if (in_array($ghlStatus, ['PAID', 'COMPLETED'])) {
                 $invoiceStatus = 'PAID';
             } elseif ($ghlStatus === 'VOIDED' || $ghlStatus === 'CANCELLED') {
                 $invoiceStatus = 'VOIDED';
             }
-            // AUTHORISED is default for all other statuses
+            // AUTHORISED is default for all other statuses (including DRAFT, SUBMITTED, PENDING)
+            // Customer-facing invoices should always be AUTHORISED (awaiting payment) in Xero
         }
 
         // Build Xero invoice

@@ -776,6 +776,8 @@ class StripeController extends AdminController
                 'currency' => $currency,
                 'paymentType' => $paymentType,
                 'status' => 'succeeded',
+                'provider' => 'stripe', // FIX 1: Set provider to 'stripe' for Stripe payments
+                'transactionId' => $paymentIntentId, // FIX 1: Set transactionId for consistency with PortalService
                 'stripeEventId' => null, // Will be set when webhook arrives
                 'paidAt' => current_time('mysql'),
                 'refunded' => false,

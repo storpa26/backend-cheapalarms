@@ -168,6 +168,11 @@ class Plugin
         $this->registerRoles();
         $this->registerServices();
         $this->container->get(Authenticator::class)->boot();
+        
+        // Register WP-CLI commands
+        if (defined('WP_CLI') && WP_CLI) {
+            $this->registerCliCommands();
+        }
 
         // Background sync hook for estimate snapshots (WP-Cron).
         add_action('ca_sync_estimate_snapshots', function (string $locationId) {
@@ -715,6 +720,12 @@ class Plugin
     private function registerFrontend(): void
     {
         new PortalPage();
+    }
+
+    private function registerCliCommands(): void
+    {
+        require_once CA_PLUGIN_PATH . 'includes/Commands/RepairPaymentsCommand.php';
+        \WP_CLI::add_command('cheapalarms repair-payments', \CheapAlarms\Plugin\Commands\RepairPaymentsCommand::class);
     }
 
     public function container(): Container
