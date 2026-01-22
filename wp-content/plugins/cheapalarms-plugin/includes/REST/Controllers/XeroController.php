@@ -101,6 +101,20 @@ class XeroController extends AdminController
                 return $this->syncInvoice($request);
             },
         ]);
+
+        // Sync payment to Xero (record payment against existing invoice)
+        register_rest_route('ca/v1', '/xero/sync-payment', [
+            'methods' => 'POST',
+            'permission_callback' => fn () => true,
+            'callback' => function (WP_REST_Request $request) {
+                $this->ensureUserLoaded();
+                $authCheck = $this->auth->requireCapability('ca_manage_portal');
+                if (is_wp_error($authCheck)) {
+                    return $this->respond($authCheck);
+                }
+                return $this->syncPayment($request);
+            },
+        ]);
     }
 
     private function getAuthorizationUrl(WP_REST_Request $request): WP_REST_Response
@@ -262,6 +276,167 @@ class XeroController extends AdminController
             'xeroInvoiceId' => $result['invoiceId'],
             'xeroInvoiceNumber' => $result['invoiceNumber'],
             'message' => __('Invoice synced to Xero successfully.', 'cheapalarms'),
+        ]);
+    }
+
+    private function syncPayment(WP_REST_Request $request): WP_REST_Response
+    {
+        $body = $request->get_json_params();
+        $invoiceId = sanitize_text_field($body['invoiceId'] ?? '');
+        $transactionId = sanitize_text_field($body['transactionId'] ?? '');
+
+        if (empty($invoiceId)) {
+            return $this->respond(new WP_Error('missing_invoice_id', __('Invoice ID is required.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $portalMetaRepo = $this->container->get(\CheapAlarms\Plugin\Services\Shared\PortalMetaRepository::class);
+        $estimateId = $portalMetaRepo->findEstimateIdByInvoiceId($invoiceId);
+        if (!$estimateId) {
+            return $this->respond(new WP_Error('estimate_not_found', __('Estimate not found for this invoice.', 'cheapalarms'), ['status' => 404]));
+        }
+
+        $meta = $portalMetaRepo->get($estimateId);
+        $invoiceMeta = $meta['invoice'] ?? [];
+        $paymentMeta = $meta['payment'] ?? [];
+        $payments = $paymentMeta['payments'] ?? [];
+
+        if (!is_array($payments) || empty($payments)) {
+            return $this->respond(new WP_Error('no_payments', __('No payments found for this invoice.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $xeroInvoiceId = $invoiceMeta['xeroInvoiceId'] ?? null;
+        if (empty($xeroInvoiceId)) {
+            $invoiceNumber = $invoiceMeta['invoiceNumber'] ?? $invoiceMeta['number'] ?? null;
+            if ($invoiceNumber) {
+                $findResult = $this->xeroService->findInvoiceByNumber($invoiceNumber);
+                if (!is_wp_error($findResult) && !empty($findResult['invoiceId'])) {
+                    $xeroInvoiceId = $findResult['invoiceId'];
+                    $invoiceMeta['xeroInvoiceId'] = $xeroInvoiceId;
+                    $invoiceMeta['xeroInvoiceNumber'] = $findResult['invoiceNumber'] ?? $invoiceNumber;
+                }
+            }
+        }
+
+        if (empty($xeroInvoiceId)) {
+            return $this->respond(new WP_Error('xero_invoice_missing', __('Xero invoice ID not found. Sync invoice first.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $paymentIndex = null;
+        $paymentRecord = null;
+
+        if (!empty($transactionId)) {
+            foreach ($payments as $index => $payment) {
+                $matchesTransactionId = !empty($payment['transactionId']) && $payment['transactionId'] === $transactionId;
+                $matchesPaymentIntentId = !empty($payment['paymentIntentId']) && $payment['paymentIntentId'] === $transactionId;
+                if ($matchesTransactionId || $matchesPaymentIntentId) {
+                    $paymentIndex = $index;
+                    $paymentRecord = $payment;
+                    break;
+                }
+            }
+        } else {
+            $latestIndex = null;
+            $latestTimestamp = null;
+            foreach ($payments as $index => $payment) {
+                $isSuccessful = (($payment['status'] ?? null) === 'succeeded');
+                $isRefunded = ($payment['refunded'] ?? false) === true;
+                $alreadySynced = !empty($payment['xeroPaymentId']) || (!empty($payment['xeroSynced']) && $payment['xeroSynced'] === true);
+
+                if ($isSuccessful && !$isRefunded && !$alreadySynced) {
+                    $paidAt = $payment['paidAt'] ?? null;
+                    $timestamp = $paidAt ? strtotime($paidAt) : null;
+                    if ($latestTimestamp === null || ($timestamp !== false && $timestamp > $latestTimestamp)) {
+                        $latestTimestamp = $timestamp;
+                        $latestIndex = $index;
+                    }
+                }
+            }
+
+            if ($latestIndex !== null) {
+                $paymentIndex = $latestIndex;
+                $paymentRecord = $payments[$latestIndex];
+            }
+        }
+
+        if (!$paymentRecord) {
+            return $this->respond(new WP_Error('no_payment_to_sync', __('No eligible payment found to sync.', 'cheapalarms'), ['status' => 404]));
+        }
+
+        if (!empty($paymentRecord['xeroPaymentId']) || (!empty($paymentRecord['xeroSynced']) && $paymentRecord['xeroSynced'] === true)) {
+            return $this->respond([
+                'ok' => true,
+                'message' => __('Payment already synced to Xero.', 'cheapalarms'),
+                'xeroPaymentId' => $paymentRecord['xeroPaymentId'] ?? null,
+            ]);
+        }
+
+        $amount = (float) ($paymentRecord['amount'] ?? 0);
+        if ($amount <= 0) {
+            return $this->respond(new WP_Error('invalid_payment_amount', __('Payment amount must be greater than zero.', 'cheapalarms'), ['status' => 400]));
+        }
+
+        $paymentMethod = ($paymentRecord['provider'] ?? '') === 'stripe' ? 'Stripe' : ($paymentRecord['provider'] ?? 'Manual');
+        $transactionId = $paymentRecord['transactionId'] ?? $paymentRecord['paymentIntentId'] ?? '';
+
+        $result = $this->xeroService->recordPayment($xeroInvoiceId, $amount, $paymentMethod, $transactionId);
+        if (is_wp_error($result)) {
+            return $this->respond($result);
+        }
+
+        if ($paymentIndex !== null) {
+            $payments[$paymentIndex]['xeroPaymentId'] = $result['paymentId'] ?? null;
+            $payments[$paymentIndex]['xeroSynced'] = true;
+        }
+
+        // Recalculate totals to keep portal meta consistent
+        $invoiceTotal = $invoiceMeta['ghl']['total'] ?? $invoiceMeta['total'] ?? 0;
+        $totalPaid = 0;
+        foreach ($payments as $payment) {
+            $isSuccessful = (($payment['status'] ?? null) === 'succeeded');
+            $isRefunded = ($payment['refunded'] ?? false) === true;
+            if ($isSuccessful && !$isRefunded && !empty($payment['amount'])) {
+                $totalPaid += (float) $payment['amount'];
+            }
+        }
+        $remainingBalance = max(0, ((float) $invoiceTotal) - $totalPaid);
+        $isFullyPaid = ((float) $invoiceTotal) > 0 && abs($totalPaid - (float) $invoiceTotal) < 0.01;
+
+        $paymentMeta['payments'] = $payments;
+        $paymentMeta['amount'] = $totalPaid;
+        $paymentMeta['remainingBalance'] = $remainingBalance;
+        $paymentMeta['status'] = $isFullyPaid ? 'paid' : ($totalPaid > 0 ? 'partial' : 'pending');
+
+        $invoiceMeta['amountDue'] = $remainingBalance;
+        $invoiceMeta['status'] = $isFullyPaid ? 'paid' : ($totalPaid > 0 ? 'partial' : ($invoiceMeta['status'] ?? 'draft'));
+        $invoiceMeta['xeroInvoiceId'] = $xeroInvoiceId;
+
+        $workflow = $meta['workflow'] ?? [];
+        if ($isFullyPaid) {
+            $workflow['status'] = 'paid';
+            $workflow['currentStep'] = 5;
+            if (empty($workflow['paidAt'])) {
+                $workflow['paidAt'] = current_time('mysql');
+            }
+        }
+
+        $portalMetaRepo->merge($estimateId, [
+            'payment' => $paymentMeta,
+            'invoice' => $invoiceMeta,
+            'workflow' => $workflow,
+        ]);
+
+        $this->logger->info('Payment synced to Xero', [
+            'estimateId' => $estimateId,
+            'invoiceId' => $invoiceId,
+            'xeroInvoiceId' => $xeroInvoiceId,
+            'xeroPaymentId' => $result['paymentId'] ?? null,
+        ]);
+
+        return $this->respond([
+            'ok' => true,
+            'xeroPaymentId' => $result['paymentId'] ?? null,
+            'xeroInvoiceId' => $xeroInvoiceId,
+            'message' => __('Payment synced to Xero successfully.', 'cheapalarms'),
         ]);
     }
 }

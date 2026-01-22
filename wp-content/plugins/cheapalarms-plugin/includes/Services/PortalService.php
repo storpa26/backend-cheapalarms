@@ -1753,7 +1753,7 @@ class PortalService
                     // Duplicate exists but not confirmed - allow it to complete confirmation
                     // This is an edge case but ensures unconfirmed duplicates can finish processing
                     // Continue to processing below
-                } else {
+                } elseif (!$isDuplicateTransaction) {
                     // New transactionId but invoice is already fully paid
                     // TASK B: Stricter idempotency - only succeed if PaymentIntent matches existing record OR metadata matches estimateId
                     $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
