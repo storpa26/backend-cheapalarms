@@ -1412,6 +1412,11 @@ class PortalService
      */
     public function confirmPayment(string $estimateId, string $locationId = '', array $paymentData = [])
     {
+        // TASK B: Initialize Stripe PaymentIntent variables (used later in invoice_already_paid block)
+        $stripePaymentIntentMetadata = [];
+        $stripePaymentIntentStatus = null;
+        $stripePaymentIntentSucceeded = false;
+        
         if (!$estimateId) {
             return new WP_Error('bad_request', __('estimateId required', 'cheapalarms'), ['status' => 400]);
         }
@@ -1555,8 +1560,31 @@ class PortalService
                 // SECURITY: Validate transactionId matches stored payment intent ID (if one exists)
                 // Note: After a payment is confirmed, paymentIntentId is cleared to allow new payment intents
                 // So this check only applies if a payment intent was recently created but not yet confirmed
+                // CRITICAL FIX: Only check if there's no existing confirmed payment with this transactionId
+                // This allows second payments (with different paymentIntentId) to proceed
                 $storedPaymentIntentId = $meta['payment']['paymentIntentId'] ?? null;
-                if (!empty($storedPaymentIntentId) && $transactionId !== $storedPaymentIntentId) {
+                
+                // Check if this transactionId already exists in confirmed payments
+                $existingPayments = $meta['payment']['payments'] ?? [];
+                $isExistingConfirmedPayment = false;
+                if (is_array($existingPayments)) {
+                    foreach ($existingPayments as $prevPayment) {
+                        $matchesTransactionId = !empty($prevPayment['transactionId']) && $prevPayment['transactionId'] === $transactionId;
+                        $matchesPaymentIntentId = !empty($prevPayment['paymentIntentId']) && $prevPayment['paymentIntentId'] === $transactionId;
+                        $isConfirmed = ($prevPayment['status'] ?? null) === 'succeeded' && !($prevPayment['refunded'] ?? false);
+                        
+                        if (($matchesTransactionId || $matchesPaymentIntentId) && $isConfirmed) {
+                            $isExistingConfirmedPayment = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // Only validate against stored paymentIntentId if:
+                // 1. There's a stored paymentIntentId (unconfirmed payment intent exists)
+                // 2. AND this is NOT an existing confirmed payment (allows idempotent re-confirms)
+                // 3. AND the transactionId doesn't match (prevents using wrong payment intent)
+                if (!empty($storedPaymentIntentId) && !$isExistingConfirmedPayment && $transactionId !== $storedPaymentIntentId) {
                     $this->logger->warning('Transaction ID mismatch in payment confirmation', [
                         'estimateId' => $estimateId,
                         'providedTransactionId' => $transactionId,
@@ -1590,8 +1618,13 @@ class PortalService
                 // Get actual payment amount from Stripe (already converted from cents to dollars)
                 $actualPaymentAmount = $paymentIntentResult['amount'] ?? 0;
                 
+                // TASK B: Store PaymentIntent metadata and status for idempotency check (used later if invoice already paid)
+                $stripePaymentIntentMetadata = $paymentIntentResult['metadata'] ?? [];
+                $stripePaymentIntentStatus = $paymentIntentResult['status'] ?? 'unknown';
+                $stripePaymentIntentSucceeded = ($stripePaymentIntentStatus === 'succeeded');
+                
                 // Verify payment intent status
-                $paymentStatus = $paymentIntentResult['status'] ?? 'unknown';
+                $paymentStatus = $stripePaymentIntentStatus;
                 
                 // Allow 'succeeded' and 'processing' statuses
                 // 'processing' means payment is being processed asynchronously - webhook will confirm final status
@@ -1721,11 +1754,103 @@ class PortalService
                     // This is an edge case but ensures unconfirmed duplicates can finish processing
                     // Continue to processing below
                 } else {
-                    // New transactionId but invoice is already fully paid -> reject to prevent overpayment
+                    // New transactionId but invoice is already fully paid
+                    // TASK B: Stricter idempotency - only succeed if PaymentIntent matches existing record OR metadata matches estimateId
+                    $remainingBalance = max(0, $invoiceTotal - $existingPaidAmount);
+                    
+                    // Guard against empty transactionId before substr() to prevent PHP warnings
+                    $tx = (string) $transactionId;
+                    $txShort = $tx ? substr($tx, 0, 3) . '...' . substr($tx, -6) : 'missing';
+                    
+                     // Check if there's a payment record with matching paymentIntentId (webhook might have created it)
+                    $hasMatchingPaymentIntent = false;
+                    $matchingPaymentRecord = null;
+                    $existingPayments = $meta['payment']['payments'] ?? [];
+                    if (is_array($existingPayments) && $provider === 'stripe') {
+                        foreach ($existingPayments as $prevPayment) {
+                            // For Stripe, transactionId IS the paymentIntentId
+                            $matchesPaymentIntentId = !empty($prevPayment['paymentIntentId']) && $prevPayment['paymentIntentId'] === $transactionId;
+                            $matchesTransactionId = !empty($prevPayment['transactionId']) && $prevPayment['transactionId'] === $transactionId;
+                            
+                            if ($matchesPaymentIntentId || $matchesTransactionId) {
+                                $hasMatchingPaymentIntent = true;
+                                $matchingPaymentRecord = $prevPayment;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Option A: Check if we already recorded this PaymentIntent for this estimate
+                    if ($provider === 'stripe' && $hasMatchingPaymentIntent) {
+                        $this->logger->info('[PAYMENT_CONFIRM] Payment already processed (matching record found), returning idempotent success', [
+                            'estimateId' => $estimateId,
+                            'transactionIdPrefix' => $txShort,
+                            'existingPaidAmount' => $existingPaidAmount,
+                            'invoiceTotal' => $invoiceTotal,
+                            'paymentAmount' => $amount,
+                            'matchingRecordStatus' => $matchingPaymentRecord['status'] ?? null,
+                        ]);
+                        
+                        return [
+                            'ok' => true,
+                            'payment' => $meta['payment'] ?? null,
+                            'alreadyPaid' => true,
+                            'duplicateTransaction' => true,
+                            'webhookProcessed' => true,
+                        ];
+                    }
+                    
+                    // Option B: If PaymentIntent succeeded, only accept if metadata matches estimateId
+                    if ($provider === 'stripe' && $stripePaymentIntentSucceeded) {
+                        $stripeMetadataEstimateId = $stripePaymentIntentMetadata['estimateId'] ?? null;
+                        if ($stripeMetadataEstimateId === $estimateId) {
+                            $this->logger->info('[PAYMENT_CONFIRM] Payment already processed (metadata matches), returning idempotent success', [
+                                'estimateId' => $estimateId,
+                                'transactionIdPrefix' => $txShort,
+                                'stripeMetadataEstimateId' => $stripeMetadataEstimateId,
+                                'stripeStatus' => $stripePaymentIntentStatus,
+                                'existingPaidAmount' => $existingPaidAmount,
+                                'invoiceTotal' => $invoiceTotal,
+                            ]);
+                            
+                            return [
+                                'ok' => true,
+                                'payment' => $meta['payment'] ?? null,
+                                'alreadyPaid' => true,
+                                'duplicateTransaction' => true,
+                                'metadataMatched' => true,
+                            ];
+                        }
+                    }
+                    
+                    // Neither condition met - reject to prevent overpayment or wrong estimate
+                    $this->logger->warning('[PAYMENT_CONFIRM] Payment rejected: Invoice already fully paid (no matching record or metadata)', [
+                        'estimateId' => $estimateId,
+                        'transactionIdPrefix' => $txShort,
+                        'existingPaidAmount' => $existingPaidAmount,
+                        'invoiceTotal' => $invoiceTotal,
+                        'paymentAmount' => $amount,
+                        'remainingBalance' => $remainingBalance,
+                        'hasMatchingPaymentIntent' => $hasMatchingPaymentIntent,
+                        'stripePaymentIntentSucceeded' => $stripePaymentIntentSucceeded,
+                        'stripeMetadataEstimateId' => $stripePaymentIntentMetadata['estimateId'] ?? null,
+                        'paymentsCount' => is_array($meta['payment']['payments'] ?? []) ? count($meta['payment']['payments']) : 0,
+                    ]);
+                    
                     return new WP_Error(
                         'invoice_already_paid',
-                        __('Invoice is already fully paid. No further payment is required.', 'cheapalarms'),
-                        ['status' => 400, 'alreadyPaid' => true]
+                        sprintf(
+                            __('Invoice is already fully paid (Paid: %.2f, Total: %.2f). This payment intent does not match any recorded payment for this estimate. If you believe this is an error, please contact support.', 'cheapalarms'),
+                            $existingPaidAmount,
+                            $invoiceTotal
+                        ),
+                        [
+                            'status' => 400,
+                            'alreadyPaid' => true,
+                            'existingPaidAmount' => $existingPaidAmount,
+                            'invoiceTotal' => $invoiceTotal,
+                            'remainingBalance' => $remainingBalance,
+                        ]
                     );
                 }
             }
@@ -1870,6 +1995,8 @@ class PortalService
                 // This prevents duplicate payment records when webhook fires after confirmPayment
                 if ($provider === 'stripe' && !empty($transactionId)) {
                     // For Stripe, transactionId IS the paymentIntentId
+                    // CRITICAL FIX: Also set transactionId for Stripe payments so Xero sync can find the record
+                    $paymentRecord['transactionId'] = sanitize_text_field($transactionId);
                     $paymentRecord['paymentIntentId'] = sanitize_text_field($transactionId);
                     $paymentRecord['status'] = 'succeeded'; // Mark as succeeded (webhook will update if needed)
                 }

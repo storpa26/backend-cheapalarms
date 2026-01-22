@@ -329,18 +329,34 @@ class StripeController extends AdminController
         set_transient($lockKey, time(), 5);
 
         try {
-            // FIXED: Generate stable idempotency key (no time() - defeats idempotency)
-            // Format: pi_{estimateId}_{amountFixed2}_{currency}_{revisionNumber}
-            // Note: This key ensures that retries of the same request (same estimate, amount, currency, revision)
-            // will reuse the same PaymentIntent, preventing duplicate charges. If the existing PaymentIntent
-            // is succeeded/canceled, the code below will create a new one (bypassing this idempotency key).
+            // CRITICAL FIX: Generate unique idempotency key per payment attempt
+            // Format: pi_{estimateId}_{amountFixed2}_{currency}_{revisionNumber}_{paymentCount}
+            // Payment count ensures each payment attempt gets a unique PaymentIntent from Stripe,
+            // preventing Stripe's idempotency cache from returning old succeeded PaymentIntents
+            // This fixes the bug where second payments with same amount were treated as duplicates
             $revisionNumber = $meta['quote']['revisionNumber'] ?? 0;
+            
+            // Calculate payment count (successful, non-refunded payments only)
+            // This makes the idempotency key unique for each payment attempt
+            $existingPayments = $meta['payment']['payments'] ?? [];
+            $paymentCount = 0;
+            if (is_array($existingPayments)) {
+                foreach ($existingPayments as $p) {
+                    $isSuccessful = (($p['status'] ?? null) === 'succeeded');
+                    $isRefunded = ($p['refunded'] ?? false) === true;
+                    if ($isSuccessful && !$isRefunded) {
+                        $paymentCount++;
+                    }
+                }
+            }
+            
             $idempotencyKey = sprintf(
-                'pi_%s_%s_%s_%d',
+                'pi_%s_%s_%s_%d_%d',
                 $estimateId,
                 number_format($amount, 2, '.', ''), // Stable decimal format (e.g., "500.00")
                 strtolower($currency),
-                $revisionNumber
+                $revisionNumber,
+                $paymentCount // Unique per payment attempt
             );
 
             // Check for existing payment intent with same parameters
